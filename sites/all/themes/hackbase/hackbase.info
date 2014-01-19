@@ -1,4 +1,4 @@
-name = Bootstrap Sub-theme
+name = Hackbase theme
 description = A Bootstrap Sub-theme.
 core = 7.x
 base theme = bootstrap

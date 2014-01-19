@@ -1,0 +1,3919 @@
+<?php
+
+/**
+ * @file getlocations_leaflet.module
+ * @author Bob Hutchinson http://drupal.org/user/52366
+ * @copyright GNU GPL
+ *
+ * Provides Leaflet maps integration for data from Getlocations Fields, location_cck, geofield and geolocation modules.
+ *
+ *
+ */
+
+define('GETLOCATIONS_LEAFLET_PATH', drupal_get_path('module', 'getlocations_leaflet'));
+
+/**
+ * Implements hook_help().
+ */
+function getlocations_leaflet_help($path, $arg) {
+  switch ($path) {
+    case 'admin/help#getlocations':
+      $output = '<p>' . t('Provides Leaflet Maps integration for Getlocations.') . '</p>';
+      return $output;
+  }
+}
+
+/**
+ * Implements hook_menu().
+ */
+function getlocations_leaflet_menu() {
+  $items = array();
+  $items[GETLOCATIONS_ADMIN_PATH . '/leaflet'] = array(
+    'title' => 'Leaflet',
+    'description' => 'Configure Getlocations leaflet',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('getlocations_leaflet_settings_form'),
+    'access arguments' => array('administer site configuration'),
+    'type' => MENU_LOCAL_TASK,
+  );
+
+  // getlocations/[entity_type]/$nid    # show all location on one entity_type
+  $items['getlocations_leaflet/%getlocations_entity_type/%getlocations_id'] = array(
+    'title' => 'Get locations',
+    'access callback' => 'getlocations_access_location',
+    'page callback' => 'getlocations_leaflet_entity_type_map',
+    'page arguments' => array(1, 2),
+    'type' => MENU_CALLBACK,
+  );
+
+
+
+  return $items;
+}
+
+/**
+ * Implements hook_flush_caches().
+ */
+function getlocations_leaflet_flush_caches() {
+  if (variable_get('getlocations_leaflet_flush', 1)) {
+    getlocations_leaflet_regenerate_markers();
+  }
+}
+
+/**
+ * Implements hook_library().
+ */
+function getlocations_leaflet_library() {
+
+  $aggr = (getlocations_aggr_get() ? TRUE : FALSE);
+
+  $libraries['leaflet'] = array(
+    'title' => 'Leaflet',
+    'website' => 'http://leafletjs.com',
+    'version' => '0.7',
+    'js' => array(
+      libraries_get_path('leaflet') . '/leaflet.js' => array(
+        'type' => 'file',
+        'group' => JS_LIBRARY,
+        'preprocess' => $aggr
+      ),
+    ),
+    'css' => array(
+      libraries_get_path('leaflet') . '/leaflet.css' => array(
+        'type' => 'file',
+        'media' => 'all',
+      ),
+    ),
+  );
+
+  $getlocations_leaflet_paths = getlocations_leaflet_paths_get();
+  $getlocations_leaflet_plugins = getlocations_leaflet_plugins();
+
+  $libraries['getlocations-leaflet'] = array(
+    'title' => 'Getlocations Leaflet javascript',
+    'website' => 'http://drupal.org/project/getlocations',
+    'version' => GETLOCATIONS_VERSION,
+    'dependencies' => array(
+      array('getlocations_leaflet', 'leaflet')
+    )
+  );
+
+  // add plugins
+  $jsarr = array();
+  $cssarr = array();
+  if ($getlocations_leaflet_plugins['fullscreen_enable']) {
+    $jsarr += array(
+      GETLOCATIONS_LEAFLET_PATH . '/plugins/fullscreen/Control.FullScreen.min.js' => array(
+        'type' => 'file',
+        'preprocess' => $aggr
+      ),
+    );
+    $cssarr += array(
+      GETLOCATIONS_LEAFLET_PATH . '/plugins/fullscreen/Control.FullScreen.min.css' => array(
+        'type' => 'file',
+        'media' => 'all',
+      ),
+    );
+  }
+
+  if ($getlocations_leaflet_plugins['graticule_enable']) {
+    $jsarr += array(
+      GETLOCATIONS_LEAFLET_PATH . '/plugins/graticule/L.Graticule.min.js' => array(
+        'type' => 'file',
+        'preprocess' => $aggr
+      ),
+    );
+  }
+
+  if ($getlocations_leaflet_plugins['markercluster_enable']) {
+    $jsarr += array(
+      GETLOCATIONS_LEAFLET_PATH . '/plugins/markercluster/leaflet.markercluster.js' => array(
+        'type' => 'file',
+        'preprocess' => $aggr
+      ),
+    );
+    $cssarr += array(
+      GETLOCATIONS_LEAFLET_PATH . '/plugins/markercluster/MarkerCluster.min.css' => array(
+        'type' => 'file',
+        'media' => 'all',
+      ),
+      GETLOCATIONS_LEAFLET_PATH . '/plugins/markercluster/MarkerCluster.Default.min.css' => array(
+        'type' => 'file',
+        'media' => 'all',
+      ),
+    );
+  }
+
+  if ($getlocations_leaflet_plugins['pancontrol_enable']) {
+    $jsarr += array(
+      GETLOCATIONS_LEAFLET_PATH . '/plugins/pancontrol/L.Control.Pan.min.js' => array(
+        'type' => 'file',
+        'preprocess' => $aggr
+      ),
+    );
+    $cssarr += array(
+      GETLOCATIONS_LEAFLET_PATH . '/plugins/pancontrol/L.Control.Pan.min.css' => array(
+        'type' => 'file',
+        'media' => 'all',
+      ),
+      GETLOCATIONS_LEAFLET_PATH . '/plugins/pancontrol/L.Control.Pan.ie.min.css' => array(
+        'browsers' => array(
+          'IE' => 'lte IE 8',
+          '!IE' => FALSE,
+        ),
+      ),
+    );
+  }
+
+  if ($getlocations_leaflet_plugins['zoomslider_enable']) {
+    $jsarr += array(
+      GETLOCATIONS_LEAFLET_PATH . '/plugins/zoomslider/L.Control.Zoomslider.min.js' => array(
+        'type' => 'file',
+        'preprocess' => $aggr
+      ),
+    );
+    $cssarr += array(
+      GETLOCATIONS_LEAFLET_PATH . '/plugins/zoomslider/L.Control.Zoomslider.min.css' => array(
+        'type' => 'file',
+        'media' => 'all',
+      ),
+      GETLOCATIONS_LEAFLET_PATH . '/plugins/zoomslider/L.Control.Zoomslider.ie.min.css' => array(
+        'browsers' => array(
+          'IE' => 'lte IE 8',
+          '!IE' => FALSE,
+        ),
+      ),
+    );
+  }
+
+  if ($getlocations_leaflet_plugins['awesome_enable']) {
+    $jsarr += array(
+      GETLOCATIONS_LEAFLET_PATH . '/plugins/awesome-markers/leaflet.awesome-markers.min.js' => array(
+        'type' => 'file',
+        'preprocess' => $aggr
+      ),
+    );
+    $cssarr += array(
+      GETLOCATIONS_LEAFLET_PATH . '/plugins/font-awesome/css/font-awesome.min.css' => array(
+        'type' => 'file',
+        'media' => 'all',
+      ),
+      GETLOCATIONS_LEAFLET_PATH . '/plugins/awesome-markers/leaflet.awesome-markers.min.css' => array(
+        'type' => 'file',
+        'media' => 'all',
+      ),
+    );
+  }
+
+  if ($getlocations_leaflet_plugins['mouseposition_enable']) {
+    $jsarr += array(
+      GETLOCATIONS_LEAFLET_PATH . '/plugins/mouseposition/L.Control.MousePosition.min.js' => array(
+        'type' => 'file',
+        'preprocess' => $aggr
+      ),
+    );
+    $cssarr += array(
+      GETLOCATIONS_LEAFLET_PATH . '/plugins/mouseposition/L.Control.MousePosition.min.css' => array(
+        'type' => 'file',
+        'media' => 'all',
+      ),
+    );
+  }
+
+  if ($getlocations_leaflet_plugins['minimap_enable']) {
+    $jsarr += array(
+      GETLOCATIONS_LEAFLET_PATH . '/plugins/sync/L.Map.Sync.min.js' => array(
+        'type' => 'file',
+        'preprocess' => $aggr
+      ),
+      GETLOCATIONS_LEAFLET_PATH . '/plugins/minimap/L.Control.Layers.Minimap.min.js' => array(
+        'type' => 'file',
+        'preprocess' => $aggr
+      ),
+    );
+    $cssarr += array(
+      GETLOCATIONS_LEAFLET_PATH . '/plugins/minimap/control.layers.minimap.min.css' => array(
+        'type' => 'file',
+        'media' => 'all',
+      ),
+    );
+  }
+
+  $jsarr += array(
+    $getlocations_leaflet_paths['getlocations_leaflet_providers_path'] => array(
+      'type' => 'file',
+      'preprocess' => $aggr
+    ),
+    $getlocations_leaflet_paths['getlocations_leaflet_path'] => array(
+      'type' => 'file',
+      'preprocess' => $aggr
+    ),
+  );
+
+  $libraries['getlocations-leaflet']['js'] = $jsarr;
+  if (! empty($cssarr)) {
+    $libraries['getlocations-leaflet']['css'] = $cssarr;
+  }
+
+  return $libraries;
+}
+
+
+
+/**
+ * Implements hook_views_api().
+ */
+function getlocations_leaflet_views_api() {
+  return array(
+    'api' => 3,
+    'path' => GETLOCATIONS_LEAFLET_PATH . '/views',
+  );
+}
+
+
+/**
+ * Implements hook_field_info().
+ * Define Field API field types.
+ *
+ * @return
+ *   An array whose keys are field type names and whose values are arrays
+ *   describing the field type.
+ */
+function getlocations_leaflet_field_info() {
+
+  $info = array(
+    'getlocations_leaflet' => array(
+      'label' => t('Getlocations Leaflet Map'),
+      'description' => t('Provide Getlocations Leaflet Map.'),
+      'default_formatter' => 'getlocations_leaflet_map',
+      'default_widget' => 'getlocations_leaflet_map',
+      'settings' => array(),
+    )
+  );
+  return $info;
+
+}
+
+/**
+ * Implements hook_field_formatter_info().
+ *
+ * Declare information about a formatter.
+ *
+ * @return
+ *   An array keyed by formatter name. Each element of the array is an associative
+ *   array with these keys and values:
+ *   - "label": The human-readable label for the formatter.
+ *   - "field types": An array of field type names that can be displayed using
+ *     this formatter.
+ *
+ */
+function getlocations_leaflet_field_formatter_info() {
+
+  $formatters = array(
+    'getlocations_leaflet_map' => array(
+      'label' => t('Getlocations Leaflet Map Field'),
+      'field types' => array('getlocations_leaflet'),
+      'settings' => getlocations_leaflet_map_formatter_defaults(),
+    ),
+    'getlocations_leaflet_link' => array(
+      'label' => t('Getlocations Leaflet Link Field'),
+      'field types' => array('getlocations_leaflet'),
+      'settings' => getlocations_leaflet_link_formatter_defaults(),
+    ),
+  );
+  return $formatters;
+}
+
+/**
+ * Implements hook_field_formatter_view().
+ * Build a renderable array for a field value.
+ *
+ * @param $entity_type
+ *   The type of $entity.
+ * @param $entity
+ *   The entity being displayed.
+ * @param $field
+ *   The field structure.
+ * @param $instance
+ *   The field instance.
+ * @param $langcode
+ *   The language associated with $items.
+ * @param $items
+ *   Array of values for this field.
+ * @param $display
+ *   The display settings to use, as found in the 'display' entry of instance definitions.
+ * @return
+ *   A renderable array for the $items, as an array of child elements keyed
+ *   by numeric indexes starting from 0.
+ *
+ */
+function getlocations_leaflet_field_formatter_view($entity_type, $entity, $field, $instance, $langcode, $items, $display) {
+
+  global $language;
+  $lang = ($langcode ? $langcode : ($entity->language ? $entity->language : $language->language));
+  $settings = $display['settings'];
+  $element = array();
+
+  switch ($display['type']) {
+    case 'getlocations_leaflet_map':
+
+      if (empty($settings)) {
+        $settings = getlocations_leaflet_map_formatter_defaults();
+      }
+
+      $module = getlocations_get_current_supported_module();
+      $bundle = $instance['bundle'];
+      $locative_field_name = (isset($items[0]['locative_field_name']) ? $items[0]['locative_field_name'] : '');
+      if ($locative_field_name) {
+        $locative_fields = $entity->{$locative_field_name}[$lang];
+        $locative_fields_count = count($locative_fields);
+        $minmaxes = '';
+
+        $default_settings = getlocations_leaflet_map_formatter_defaults();
+        $default = getlocations_adjust_vars($default_settings, $settings);
+
+        // awesome
+        $marker = '';
+        $vector = '';
+        if ($settings['awesome'] && $settings['marker_type'] == 'fa') {
+          if ($entity_type == 'node') {
+            $per_field_markers = FALSE;
+            $getlocations_node_marker = variable_get('getlocations_node_marker', array('enable' => 0));
+            if ($getlocations_node_marker['enable']) {
+              if ($types = getlocations_get_types()) {
+                foreach ($types AS $type => $name) {
+                  if ($type == $bundle) {
+                    $field_names = getlocations_get_fieldname2($type, 'node');
+                    foreach ($field_names AS $field_name) {
+                      if ($field_name == $locative_field_name) {
+                        $mkey = 'node_marker__' . strtolower($type) . '__' . $field_name;
+                        $vicon = getlocations_leaflet_awesome_marker_get($settings, $mkey);
+                        $per_field_markers = TRUE;
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            if (! $per_field_markers) {
+              $vicon = getlocations_leaflet_awesome_marker_get($settings, 'node');
+            }
+            // TODO per tid marker
+          }
+          elseif ($entity_type == 'taxonomy_term') {
+            $vicon = getlocations_leaflet_awesome_marker_get($settings, 'vocabulary');
+            // TODO ??? sort out vocab/term
+          }
+          elseif ($entity_type == 'user') {
+            $vicon = getlocations_leaflet_awesome_marker_get($settings, 'user');
+          }
+          elseif ($entity_type == 'comment') {
+            $vicon = getlocations_leaflet_awesome_marker_get($settings, 'comment');
+          }
+          else {
+            $vicon = getlocations_leaflet_awesome_marker_get($settings);
+          }
+          $vector = $vicon;
+        }
+        else {
+          // marker
+          if ($entity_type == 'node') {
+            $per_field_markers = FALSE;
+            $getlocations_node_marker = variable_get('getlocations_node_marker', array('enable' => 0));
+            if ($getlocations_node_marker['enable']) {
+              if ($types = getlocations_get_types()) {
+                foreach ($types AS $type => $name) {
+                  if ($type == $bundle) {
+                    $field_names = getlocations_get_fieldname2($type, 'node');
+                    foreach ($field_names AS $field_name) {
+                      if ($field_name == $locative_field_name) {
+                        $marker = (isset($getlocations_node_marker['content_type'][$type]['field_name'][$field_name]['map_marker']) ? $getlocations_node_marker['content_type'][$type]['field_name'][$field_name]['map_marker'] : '');
+                        $per_field_markers = TRUE;
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            if (! $per_field_markers) {
+              $marker = (isset($default['node_map_marker']) ? $default['node_map_marker'] : '');
+            }
+          }
+          elseif ($entity_type == 'user') {
+            $marker = (isset($default['user_map_marker']) ? $default['user_map_marker'] : '');
+          }
+          elseif ($entity_type == 'taxonomy_term') {
+            // TODO needs testing
+            if (module_exists('taxonomy')) {
+              // vocabulary markers
+              if ($types = getlocations_get_vocabularies()) {
+                $getlocations_vocabulary_marker = variable_get('getlocations_vocabulary_marker', array('enable' => 0));
+                if ($getlocations_vocabulary_marker['enable']) {
+                  foreach ($types AS $type => $name) {
+                    $field_name = getlocations_get_fieldname($type, 'taxonomy_term');
+                    if ($field_name == $locative_field_name) {
+                      $marker = (isset($getlocations_vocabulary_marker['vocabulary'][$type]['map_marker']) ? $getlocations_vocabulary_marker['vocabulary'][$type]['map_marker'] : $default['vocabulary_map_marker']);
+                    }
+                  }
+                }
+              }
+              // term markers
+              $getlocations_term_marker = variable_get('getlocations_term_marker', array('enable' => 0, 'vids' => 0, 'max_depth' => ''));
+              if ($getlocations_term_marker['enable'] && $getlocations_term_marker['vids']) {
+                $depth = is_numeric($getlocations_term_marker['max_depth']) && $getlocations_term_marker['max_depth'] > 0 ? $getlocations_term_marker['max_depth'] : NULL;
+                $vids = $getlocations_term_marker['vids'];
+                foreach ($vids AS $vid) {
+                  $terms = taxonomy_get_tree($vid, 0, $depth);
+                  foreach ($terms AS $term) {
+                    $tid = $term->tid;
+                    $marker = (isset($getlocations_term_marker['vid'][$vid]['term'][$tid]['map_marker']) ? $getlocations_term_marker['vid'][$vid]['term'][$tid]['map_marker'] : $default['term_map_marker']);
+                  }
+                }
+              }
+            }
+          }
+          elseif ($entity_type == 'comment') {
+            $marker = (isset($default['comment_map_marker']) ? $default['comment_map_marker'] : '');
+          }
+          else {
+            $marker = (isset($default['node_map_marker']) ? $default['node_map_marker'] : '');
+          }
+        }
+
+        $mapzoom = FALSE;
+        $iconlist = array();
+        $minmaxes = array('minlat' => 0, 'minlon' => 0, 'maxlat' => 0, 'maxlon' => 0);
+
+        // fetch lats and lons
+        $ct = 0;
+        foreach (array_keys($locative_fields) AS $delta) {
+          $title = '';
+          $lid = 0;
+          if (isset($entity->{$locative_field_name}[$lang][$delta]) && $location = $entity->{$locative_field_name}[$lang][$delta]) {
+            // collect the lat and lon
+            if ($module == 'getlocations_fields') {
+              $lat = $location['latitude'];
+              $lon = $location['longitude'];
+              $lid = (isset($location['glid']) ? $location['glid'] : 0);
+            }
+            elseif ($module == 'location_cck') {
+              $lat = $location['latitude'];
+              $lon = $location['longitude'];
+              $lid = (isset($location['lid']) ? $location['lid'] : 0);
+            }
+            elseif ($module == 'geofield') {
+              $lat = $location['lat'];
+              $lon = $location['lon'];
+            }
+            elseif ($module == 'geolocation') {
+              $lat = $location['lat'];
+              $lon = $location['lng'];
+            }
+
+            if (isset($lat) && ! empty($lat) && isset($lon) && ! empty($lon)  && $latlon = getlocations_latlon_check($lat . ',' . $lon)) {
+              $ll = explode(',', $latlon);
+              $location['latitude'] = $ll[0];
+              $location['longitude'] = $ll[1];
+              $entity_get_info = entity_get_info($entity_type);
+              $entity_key = $entity_get_info['entity keys']['id']; // nid, cid, uid etc
+              $entity_id = $entity->{$entity_key};
+
+              if (isset($location['name']) && ! empty($location['name'])) {
+                $title = $location['name'];
+              }
+              else {
+                $title = (isset($entity->title) ? $entity->title : '');
+              }
+              $title = htmlspecialchars_decode(strip_tags($title), ENT_QUOTES);
+              $minmaxes = getlocations_do_minmaxes($ct, $location, $minmaxes);
+
+              // per item marker
+              if (isset($location['marker']) && ! empty($location['marker'])) {
+                $marker = $location['marker'];
+              }
+
+              if (isset($location['mapzoom'])) {
+                $mapzoom = $location['mapzoom'];
+              }
+
+              if ($lid && $default['markeraction'] == 'popup') {
+                $markeraction = array('type' => 'popup', 'data' => getlocations_getinfo($lid, $entity_key));
+              }
+              elseif ($lid && $default['markeraction'] == 'link') {
+                $markeraction = array('type' => 'link', 'data' => getlocations_getlidinfo($lid, $entity_key));
+              }
+              else {
+                $markeraction = array();
+              }
+
+              $iconlist[$marker] = getlocations_leaflet_get_marker($marker);
+
+              $latlons[$ct] = array($location['latitude'], $location['longitude'], $entity_key, $entity_id, $location['glid'], $title, $marker, $vector, $markeraction, '');
+
+              $ct++;
+            } // end lat lon check
+          }
+        } // end foreach
+
+        if ($ct < 2 ) {
+          unset($minmaxes);
+          $minmaxes = '';
+        }
+
+        $map_settings = getlocations_leaflet_map_get_info('Getlocations OSM');
+        $map_settings = getlocations_leaflet_get_map_layers($map_settings);
+
+        if (! empty($settings['baselayers'])) {
+          $map_layers = array();
+          foreach ($settings['baselayers'] AS $k => $v) {
+            if (isset($map_settings['map_layers'][$k]) && $settings['baselayers'][$k]) {
+              $map_layers[$k] = $map_settings['map_layers'][$k];
+            }
+          }
+          if (! empty($map_layers)) {
+            $map_settings['map_layers'] = $map_layers;
+          }
+        }
+
+        $nodezoom = FALSE;
+        if ($ct == 1 && $settings['nodezoom']) {
+          $nodezoom = $settings['nodezoom'];
+          $map_settings['map_opts']['center'] = array($location['latitude'], $location['longitude']);
+          $map_settings['map_opts']['zoom'] = $nodezoom;
+        }
+        elseif ($ct < 1) {
+          $ll = explode(',', $default['latlong']);
+          $map_settings['map_opts']['center'] = array($ll[0], $ll[1]);
+        }
+
+        $mapid = getlocations_setup_map('', FALSE, FALSE, TRUE);
+
+        // add in some more
+        $map_settings = getlocations_leaflet_map_settings_do($map_settings, $default, $latlons, $mapid);
+
+        $map_settings['map_settings']['nodezoom'] = ($nodezoom ? $nodezoom : FALSE);
+        $map_settings['map_settings']['minmaxes'] = (empty($minmaxes) ? FALSE : implode(',', $minmaxes));
+
+        $map_settings['icons'] = $iconlist;
+        $map_settings['datanum'] = $ct;
+        $map_settings['latlons'] = $latlons;
+
+        drupal_add_library('getlocations_leaflet', 'getlocations-leaflet');
+
+        $element[$delta] = array(
+          '#theme' => 'getlocations_leaflet_map',
+          '#width' => $default['width'],
+          '#height' => $default['height'],
+          '#map_settings' => $map_settings,
+          '#mapid' => $mapid,
+          '#links' => '',
+        );
+
+      } // end if ($locative_field_name)
+      break;
+
+    case 'getlocations_leaflet_link':
+
+      if (empty($settings) || ! isset($settings['text'])) {
+        $settings = getlocations_leaflet_link_formatter_defaults();
+      }
+
+      $bundle = $instance['bundle'];
+      $locative_field_name = (isset($items[0]['locative_field_name']) ? $items[0]['locative_field_name'] : '');
+      if ($locative_field_name) {
+        $locative_fields = $entity->{$locative_field_name}[$lang];
+        foreach (array_keys($locative_fields) AS $delta) {
+          $entity_get_info = entity_get_info($entity_type);
+          $entity_key = $entity_get_info['entity keys']['id']; // nid, cid, uid etc
+          $entity_id = $entity->{$entity_key};
+          $link_text = $settings['text'];
+          if ($settings['text_opt'] == 'page') {
+            $entity_title = '';
+            if (isset($entity_get_info['entity keys']['label'])) {
+              $entity_title = $entity_get_info['entity keys']['label'];
+            }
+            elseif ($entity_type == 'user') {
+              $entity_title = 'name';
+            }
+            if ($entity_title && isset($entity->{$entity_title})) {
+              $link_text = $entity->{$entity_title};
+            }
+          }
+          $link_text = check_plain($link_text);
+          $element[$delta] = array(
+            '#theme' => 'getlocations_leaflet_link',
+            '#link_text' => $link_text,
+            '#entity_type' => $entity_type,
+            '#entity_id' => $entity_id,
+          );
+        }
+      } // end if ($locative_field_name)
+      break;
+  } // end switch
+  return $element;
+}
+
+
+/**
+ * Implements hook_field_formatter_settings_summary().
+ * Returns a short summary for the current formatter settings of an instance.
+ *
+ *
+ * If an empty result is returned, the formatter is assumed to have no
+ * configurable settings, and no UI will be provided to display a settings
+ * form.
+ *
+ *   The field structure.
+ * @param $instance
+ *   The instance structure.
+ * @param $view_mode
+ *   The view mode for which a settings summary is requested.
+ *
+ * @return
+ *   A string containing a short summary of the formatter settings.
+ */
+function getlocations_leaflet_field_formatter_settings_summary($field, $instance, $view_mode) {
+  $display = $instance['display'][$view_mode];
+  $settings = $display['settings'];
+  $summary = array();
+
+  switch ($display['type']) {
+    case 'getlocations_leaflet_map':
+
+      $summary[] = t('Getlocations Leaflet Map Field settings');
+
+      if ($settings['zoomslider']) {
+        $summary[] = t('Show zoom slider: Yes');
+      }
+      elseif ($settings['zoomControl']) {
+        $summary[] = t('Show zoom control: Yes');
+      }
+      if ($settings['layerControl']) {
+        $summary[] = t('Show layer control: Yes');
+      }
+      if ($settings['scaleControl']) {
+        $summary[] = t('Show scale: Yes');
+      }
+      if ($settings['attributionControl']) {
+        $summary[] = t('Show attribution: Yes');
+      }
+      if ($settings['fullscreen']) {
+        $summary[] = t('Show fullscreen control: Yes');
+      }
+      if ($settings['markercluster']) {
+        $summary[] = t('Enable markercluster: Yes');
+      }
+      if ($settings['pancontrol']) {
+        $summary[] = t('Show Pan control: Yes');
+      }
+      if ($settings['awesome']) {
+        $summary[] = t('Enable Awesome fonts: Yes');
+      }
+      if ($settings['graticule']) {
+        $summary[] = t('Show grid: Yes');
+      }
+      if ($settings['polygons_enable']) {
+        $summary[] = t('Enable polygons: Yes');
+        if ($settings['polygons_clickable']) {
+          $summary[] = t('Polygons clickable: Yes');
+        }
+      }
+      if ($settings['rectangles_enable']) {
+        $summary[] = t('Enable rectangles: Yes');
+        if ($settings['rectangles_clickable']) {
+          $summary[] = t('Rectangles clickable: Yes');
+        }
+      }
+      if ($settings['circles_enable']) {
+        $summary[] = t('Enable circles: Yes');
+        if ($settings['circles_clickable']) {
+          $summary[] = t('Circles clickable: Yes');
+        }
+      }
+      if ($settings['polylines_enable']) {
+        $summary[] = t('Enable polylines: Yes');
+        if ($settings['polylines_clickable']) {
+          $summary[] = t('Polylines clickable: Yes');
+        }
+      }
+
+      break;
+
+    case 'getlocations_leaflet_link':
+      $summary[] = t('Getlocations Leaflet Link Field settings');
+      if ($settings['text_opt']) {
+        $summary[] = t('Text options: @a', array('@a' => $settings['text_opt']));
+      }
+      if ($settings['text']) {
+        $summary[] = t('Text: @a', array('@a' => $settings['text']));
+      }
+
+
+      break;
+
+  }
+  return implode('<br />', $summary);
+}
+
+/**
+ * Implements hook_field_formatter_settings_form().
+ * Returns form elements for a formatter's settings.
+ *
+ * @param $field
+ *   The field structure being configured.
+ * @param $instance
+ *   The instance structure being configured.
+ * @param $view_mode
+ *   The view mode being configured.
+ * @param $form
+ *   The (entire) configuration form array, which will usually have no use here.
+ * @param $form_state
+ *   The form state of the (entire) configuration form.
+ *
+ * @return
+ *   The form elements for the formatter settings.
+ */
+function getlocations_leaflet_field_formatter_settings_form($field, $instance, $view_mode, $form, &$form_state) {
+  $getlocations_leaflet_paths = getlocations_leaflet_paths_get();
+  drupal_add_js($getlocations_leaflet_paths['getlocations_leaflet_formatter_path']);
+
+  $display = $instance['display'][$view_mode];
+  $settings = $display['settings'];
+  $element = array();
+  switch ($display['type']) {
+    case 'getlocations_leaflet_map':
+
+      $settings['map_resize'] = 0;
+      $settings['fullscreen_disable'] = 0;
+      $settings['styles'] = '';
+      $labels = array(
+        'width' => t('Width'),
+        'height' => t('Height'),
+      );
+
+      $element += getlocations_map_display_basics_form($settings, $labels);
+      unset($element['map_resize']);
+      unset($element['fullscreen_disable']);
+      unset($element['styles']);
+      $element['width']['#element_validate'] = array('getlocations_element_validate_dim');
+      $element['height']['#element_validate'] = array('getlocations_element_validate_dim');
+      $element['latlong']['#element_validate'] = array('getlocations_element_validate_latlon');
+
+      unset($element['zoom']['#options']['21']);
+      unset($element['zoom']['#options']['20']);
+      unset($element['zoom']['#options']['19']);
+
+      unset($element['minzoom_map']['#options']['21']);
+      unset($element['minzoom_map']['#options']['20']);
+      unset($element['minzoom_map']['#options']['19']);
+
+      unset($element['maxzoom_map']['#options']['21']);
+      unset($element['maxzoom_map']['#options']['20']);
+      unset($element['maxzoom_map']['#options']['19']);
+
+      $element += getlocations_leaflet_display_options_form($settings, TRUE);
+
+      unset($element['nodezoom']['#options']['21']);
+      unset($element['nodezoom']['#options']['20']);
+      unset($element['nodezoom']['#options']['19']);
+
+      // awesome?
+
+    break;
+    case 'getlocations_leaflet_link':
+      $element['text'] = array(
+        '#type' => 'textfield',
+        '#title' => t('Default text'),
+        '#description' => t('The text to use if no other option is available.'),
+        '#default_value' => $settings['text'],
+        '#size' => 25,
+      );
+      $element['text_opt'] = array(
+        '#type' => 'select',
+        '#title' => t('Display format'),
+        '#default_value' => $settings['text_opt'],
+        '#options' => $settings['text_options'],
+      );
+    break;
+
+  }
+  return $element;
+
+}
+
+/**
+ * Implements hook_field_widget_info().
+ * Expose Field API widget types.
+ *
+ * @return
+ *   An array describing the widget types implemented by the module.
+ *
+ */
+function getlocations_leaflet_field_widget_info() {
+  $info = array(
+    'getlocations_leaflet_map' => array(
+      'label' => t('Getlocations Leaflet Map Field'),
+      'field types' => array('getlocations_leaflet'),
+      'settings' => array(
+        //
+      ),
+    ),
+  );
+  return $info;
+}
+
+/**
+ * Implements hook_field_widget_form().
+ * Return the form for a single field widget.
+ *
+ * @param $form
+ *   The form structure where widgets are being attached to. This might be a
+ *   full form structure, or a sub-element of a larger form.
+ * @param $form_state
+ *   An associative array containing the current state of the form.
+ * @param $field
+ *   The field structure.
+ * @param $instance
+ *   The field instance.
+ * @param $langcode
+ *   The language associated with $items.
+ * @param $items
+ *   Array of default values for this field.
+ * @param $delta
+ *   The order of this item in the array of subelements (0, 1, 2, etc).
+ * @param $element
+ *   A form element array containing basic properties for the widget.
+ * @return
+ *   The form elements for a single widget for this field.
+ */
+function getlocations_leaflet_field_widget_form(&$form, &$form_state, $field, $instance, $langcode, $items, $delta, $element) {
+
+  switch ($instance['widget']['type']) {
+    case 'getlocations_leaflet_map':
+
+      // is this real or a demo in settings
+      $active = TRUE;
+      if (empty($element['#entity'])) {
+        $active = FALSE;
+      }
+
+      $entity_type = $element['#entity_type'];
+      $bundle = $element['#bundle'];
+      $module = getlocations_get_current_supported_module();
+      $fieldnames = array();
+      $query = db_select('field_config', 'f');
+      $query->fields('i', array('field_name', 'data'));
+      $query->join('field_config_instance', 'i', 'f.id=i.field_id');
+      $query->condition('i.bundle', $bundle)
+        ->condition('f.module', $module)
+        ->condition('i.entity_type', $entity_type)
+        ->condition('f.active', 1);
+      $rows = $query->execute();
+      foreach ($rows AS $row) {
+        $data = unserialize($row->data);
+        $fieldnames[$row->field_name] = $data['label'];
+      }
+
+      $cardinality = $field['cardinality'];
+      // Wrap in a fieldset for single fields
+      if ($cardinality == 1) {
+        $element['#type'] = 'fieldset';
+        $element['#collapsible'] = TRUE;
+        $element['#collapsed'] = FALSE;
+      }
+
+      if (! empty($fieldnames)) {
+        $element['#delta'] = $delta;
+        $dval = (isset($items[$delta]['locative_field_name']) ? $items[$delta]['locative_field_name'] : (isset($instance['default_value'][$delta]['locative_field_name']) ? $instance['default_value'][$delta]['locative_field_name'] : ''));
+        // items only see which field, no choice
+        if ($active && $dval) {
+          $element['locative_field_name'] = array('#type' => 'value', '#value' => $dval);
+          $element['locative_field_name_markup'] = array('#markup' => '<p>' . t('Locative data taken from !f', array('!f' => $fieldnames[$dval])) . '</p>');
+         }
+        else {
+          $element['locative_field_name'] = array(
+            '#type' => 'select',
+            '#title' => t('Location Field'),
+            '#options' => $fieldnames,
+            '#description' => t('Field to take locative data from'),
+            '#default_value' => $dval,
+          );
+        }
+      }
+      else {
+        if (! $active) {
+          $element['some_info'] = array(
+            '#type' => 'markup',
+            '#markup' => '<p>' . t('You must attach an instance of !m', array('!m' => $module))
+          );
+        }
+      }
+
+      break;
+  }
+  return $element;
+
+}
+
+/**
+ * Implements hook_field_widget_error().
+ *
+ * hook_field_widget_error() lets us figure out what to do with errors
+ * we might have generated in hook_field_validate(). Generally, we'll just
+ * call form_error().
+ *
+ */
+function getlocations_leaflet_field_widget_error($element, $error, $form, &$form_state) {
+  switch ($error['error']) {
+    case 'getlocations_leaflet_field_invalid':
+      form_error($element, $error['message']);
+      break;
+  }
+
+}
+
+
+/**
+ * Implements hook_field_is_empty().
+ * Define what constitutes an empty item for a field type.
+ * hook_field_is_emtpy() is where Drupal asks us if this field is empty.
+ * Return TRUE if it does not contain data, FALSE if it does. This lets
+ * the form API flag an error when required fields are empty.
+ *
+ * @param $item
+ *   An item that may or may not be empty.
+ * @param $field
+ *   The field to which $item belongs.
+ * @return
+ *   TRUE if $field's type considers $item not to contain any data;
+ *   FALSE otherwise.
+ */
+function getlocations_leaflet_field_is_empty($item, $field) {
+  return FALSE;
+}
+
+/**
+ * Function
+ *
+ * @param
+ *
+ * @return
+ *   Returns
+ *
+ */
+function getlocations_leaflet_map_formatter_defaults() {
+  return getlocations_leaflet_defaults();
+}
+
+/**
+ * Function
+ *
+ * @param
+ *
+ * @return
+ *   Returns
+ *
+ */
+function getlocations_leaflet_link_formatter_defaults() {
+  return array(
+    'text' => t('this location'),
+    'text_opt' => 'page',
+    'text_options' => array(
+      '' => t('None'),
+      'page' => t('Page title'),
+    ),
+  );
+}
+
+/**
+ * Function
+ *
+ * @param
+ *
+ * @return
+ *   Returns
+ *
+ */
+function getlocations_leaflet_map_settings_do($map_settings, $defaults, $latlons, $mapid) {
+
+  $map_settings['map_opts']['dragging']           = ($defaults['dragging'] ? TRUE : FALSE);
+  $map_settings['map_opts']['scrollWheelZoom']    = ($defaults['scrollWheelZoom'] ? TRUE : FALSE);
+  $map_settings['map_opts']['doubleClickZoom']    = ($defaults['doubleClickZoom'] ? TRUE : FALSE);
+  $map_settings['map_opts']['touchZoom']          = ($defaults['touchZoom'] ? TRUE : FALSE);
+  $map_settings['map_opts']['trackResize']        = ($defaults['trackResize'] ? TRUE : FALSE);
+  $map_settings['map_opts']['fadeAnimation']      = ($defaults['fadeAnimation'] ? TRUE : FALSE);
+  $map_settings['map_opts']['zoomAnimation']      = ($defaults['zoomAnimation'] ? TRUE : FALSE);
+  $map_settings['map_opts']['closePopupOnClick']  = ($defaults['closePopupOnClick'] ? TRUE : FALSE);
+
+  $getlocations_leaflet_plugins = getlocations_leaflet_plugins();
+  if ($getlocations_leaflet_plugins['fullscreen_enable']) {
+    $map_settings['map_settings']['fullscreen'] = ($defaults['fullscreen'] ? TRUE : FALSE);
+  }
+  else {
+    $map_settings['map_settings']['fullscreen'] = FALSE;
+  }
+  $map_settings['map_settings']['fullscreenposition'] = $defaults['fullscreenposition'];
+
+  if ($getlocations_leaflet_plugins['graticule_enable']) {
+    $map_settings['map_settings']['graticule'] = ($defaults['graticule'] ? TRUE : FALSE);
+    $map_settings['map_settings']['graticule_color'] = $defaults['graticule_color'];
+    $map_settings['map_settings']['graticule_opacity'] = $defaults['graticule_opacity'];
+    $map_settings['map_settings']['graticule_weight'] = $defaults['graticule_weight'];
+    $map_settings['map_settings']['graticule_interval'] = $defaults['graticule_interval'];
+  }
+  else {
+    $map_settings['map_settings']['graticule'] = FALSE;
+  }
+
+  if ($getlocations_leaflet_plugins['mouseposition_enable']) {
+    $map_settings['map_settings']['mouseposition'] = ($defaults['mouseposition'] ? TRUE : FALSE);
+    $map_settings['map_settings']['mouseposition_position'] = $defaults['mouseposition_position'];
+    $map_settings['map_settings']['mouseposition_display_dms'] = $defaults['mouseposition_display_dms'];
+  }
+  else {
+    $map_settings['map_settings']['mouseposition'] = FALSE;
+  }
+
+  if ($getlocations_leaflet_plugins['minimap_enable']) {
+    $map_settings['map_settings']['minimap'] = ($defaults['minimap'] ? TRUE : FALSE);
+  }
+  else {
+    $map_settings['map_settings']['minimap'] = FALSE;
+  }
+
+  if ($getlocations_leaflet_plugins['markercluster_enable']) {
+    $map_settings['map_settings']['markercluster']  = ($defaults['markercluster'] ? TRUE : FALSE);
+  }
+  else {
+    $map_settings['map_settings']['markercluster']  = FALSE;
+  }
+
+  if ($getlocations_leaflet_plugins['pancontrol_enable']) {
+    $map_settings['map_settings']['leaflet_pancontrol'] = ($defaults['pancontrol'] ? TRUE : FALSE);
+  }
+  else {
+    $map_settings['map_settings']['leaflet_pancontrol'] = FALSE;
+  }
+  $map_settings['map_settings']['pancontrolposition'] = $defaults['pancontrolposition'];
+
+  $map_settings['map_settings']['awesome'] = ($getlocations_leaflet_plugins['awesome_enable'] ? TRUE : FALSE);
+
+  $map_settings['map_settings']['markerclusteroptions'] = '';
+  if (file_exists(GETLOCATIONS_LEAFLET_PATH . '/plugins/markercluster/markerclusteroptions.inc')) {
+    module_load_include('inc', 'getlocations_leaflet', 'plugins/markercluster/markerclusteroptions');
+    if (function_exists('getlocations_leaflet_get_markerclusteroptions')) {
+      $map_settings['map_settings']['markerclusteroptions'] = getlocations_leaflet_get_markerclusteroptions();
+    }
+  }
+
+  // Zoom
+  if ($defaults['zoomControl']) {
+    $map_settings['map_opts']['zoomControl'] = FALSE;
+    $map_settings['map_settings']['zoomControl'] = TRUE;
+  }
+  else {
+    $map_settings['map_opts']['zoomControl'] = FALSE;
+    $map_settings['map_settings']['zoomControl'] = FALSE;
+  }
+  $map_settings['map_settings']['zoomcontrolposition'] = $defaults['zoomcontrolposition'];
+
+  // zoomslider
+  if ($getlocations_leaflet_plugins['zoomslider_enable']) {
+    $map_settings['map_settings']['leaflet_zoomslider'] = ($defaults['zoomslider'] ? TRUE : FALSE);
+    // kill off zoomcontrol
+    if ($defaults['zoomslider']) {
+      $map_settings['map_settings']['zoomControl'] = FALSE;
+      $map_settings['map_opts']['zoomControl'] = FALSE;
+    }
+  }
+  else {
+    $map_settings['map_settings']['leaflet_zoomslider'] = FALSE;
+  }
+  $map_settings['map_settings']['zoomsliderposition'] = $defaults['zoomsliderposition'];
+
+  // Attribution
+  if ($defaults['attributionControl'] && $defaults['attributioncontrolposition']) {
+    $map_settings['map_opts']['attributionControl'] = FALSE;
+    $map_settings['map_settings']['attributionControl'] = TRUE;
+    $map_settings['map_settings']['attributioncontrolposition'] = $defaults['attributioncontrolposition'];
+  }
+  else {
+    $map_settings['map_opts']['attributionControl'] = ($defaults['attributionControl'] ? TRUE : FALSE);
+    $map_settings['map_settings']['attributionControl'] = FALSE;
+    $map_settings['map_settings']['attributioncontrolposition'] = '';
+  }
+  // Layer
+  if ($defaults['layerControl'] && $defaults['layercontrolposition']) {
+    $map_settings['map_opts']['layerControl'] = FALSE;
+    $map_settings['map_settings']['layerControl'] = TRUE;
+    $map_settings['map_settings']['layercontrolposition'] = $defaults['layercontrolposition'];
+  }
+  else {
+    $map_settings['map_opts']['layerControl'] = FALSE;
+    $map_settings['map_settings']['layerControl'] = ($defaults['layerControl'] ? TRUE : FALSE);
+    $map_settings['map_settings']['layercontrolposition'] = '';
+  }
+  // overlays
+  $map_settings['map_settings']['layercontrol_mark_ov'] = ($defaults['layercontrol_mark_ov'] ? TRUE : FALSE);
+  $map_settings['map_settings']['layercontrol_mark_ov_label'] = $defaults['layercontrol_mark_ov_label'];
+
+  $map_settings['map_settings']['layercontrol_circ_ov'] = ($defaults['layercontrol_circ_ov'] ? TRUE : FALSE);
+  $map_settings['map_settings']['layercontrol_circ_ov_label'] = $defaults['layercontrol_circ_ov_label'];
+
+  $map_settings['map_settings']['layercontrol_polyl_ov'] = ($defaults['layercontrol_polyl_ov'] ? TRUE : FALSE);
+  $map_settings['map_settings']['layercontrol_polyl_ov_label'] = $defaults['layercontrol_polyl_ov_label'];
+
+  $map_settings['map_settings']['layercontrol_polyg_ov'] = ($defaults['layercontrol_polyg_ov'] ? TRUE : FALSE);
+  $map_settings['map_settings']['layercontrol_polyg_ov_label'] = $defaults['layercontrol_polyg_ov_label'];
+
+  $map_settings['map_settings']['layercontrol_rect_ov'] = ($defaults['layercontrol_rect_ov'] ? TRUE : FALSE);
+  $map_settings['map_settings']['layercontrol_rect_ov_label'] = $defaults['layercontrol_rect_ov_label'];
+
+  // default map
+  $ml = getlocations_leaflet_map_get_info('Getlocations OSM');
+  $map_settings['map_settings']['default_layer_name'] = $defaults['default_baselayer'];
+  $map_settings['map_settings']['default_layer_label'] = $ml['map_layers'][$defaults['default_baselayer']]['label'];
+
+  // Scale
+  $map_settings['map_settings']['scaleControl'] = ($defaults['scaleControl'] ? TRUE : FALSE);
+  $map_settings['map_settings']['scalecontrolposition'] = $defaults['scalecontrolposition'];
+  $map_settings['map_settings']['scalecontrolunits'] = $defaults['scalecontrolunits'];
+
+  if ($defaults['minzoom_map'] > -1) {
+    $map_settings['map_opts']['minZoom'] = $defaults['minzoom_map'];
+  }
+  if ($defaults['maxzoom_map'] > -1) {
+    $map_settings['map_opts']['maxZoom'] = $defaults['maxzoom_map'];
+  }
+
+  $getlocations_leaflet_paths = getlocations_leaflet_paths_get();
+  // shapes
+  // polygons
+  if ($defaults['polygons_enable'] && ! empty($defaults['polygons_coords'])) {
+    $polygons = getlocations_get_polygon_settings($defaults);
+    if ($polygons) {
+      $polygon_settings = array(
+        $mapid => $polygons,
+      );
+      drupal_add_js(array('getlocations_leaflet_polygons' => $polygon_settings), 'setting');
+      drupal_add_js($getlocations_leaflet_paths['getlocations_leaflet_polygons_path']);
+    }
+  }
+
+  // rectangles
+  if ($defaults['rectangles_enable'] && (! empty($defaults['rectangles_coords']) || ($defaults['rectangles_apply'] && $defaults['rectangles_dist']))) {
+    if ($defaults['rectangles_apply'] && $defaults['rectangles_dist']) {
+      // get latlons and set coords
+      $tmp = '';
+      foreach ($latlons AS $ll) {
+        $lats = getlocations_earth_latitude_range($ll[0], $ll[1], $defaults['rectangles_dist']);
+        $lngs = getlocations_earth_longitude_range($ll[0], $ll[1], $defaults['rectangles_dist']);
+        $tmp .= $lats[0] . ',' . $lngs[0] . '|' . $lats[1] . ',' . $lngs[1] . "\n";
+      }
+      if ($tmp) {
+        $defaults['rectangles_coords'] = $tmp;
+      }
+    }
+    $rectangles = getlocations_get_rectangle_settings($defaults);
+    if ($rectangles) {
+      $rectangle_settings = array(
+        $mapid => $rectangles,
+      );
+      drupal_add_js(array('getlocations_leaflet_rectangles' => $rectangle_settings), 'setting');
+      drupal_add_js($getlocations_leaflet_paths['getlocations_leaflet_rectangles_path']);
+    }
+  }
+
+  // circles
+  if ($defaults['circles_enable'] && $defaults['circles_radius'] > 0 && (! empty($defaults['circles_coords']) || $defaults['circles_apply'])) {
+    if ($defaults['circles_apply'] && count($latlons)) {
+      // get latlons and set coords
+      $tmp = '';
+      foreach ($latlons AS $ll) {
+        $tmp .= $ll[0] . ',' . $ll[1] . "\n";
+      }
+      if ($tmp) {
+        $defaults['circles_coords'] = $tmp;
+      }
+    }
+    $circles = getlocations_get_circle_settings($defaults);
+    if ($circles) {
+      $circle_settings = array(
+        $mapid => $circles,
+      );
+      drupal_add_js(array('getlocations_leaflet_circles' => $circle_settings), 'setting');
+      drupal_add_js($getlocations_leaflet_paths['getlocations_leaflet_circles_path']);
+    }
+  }
+
+  // polylines
+  if ($defaults['polylines_enable'] && ! empty($defaults['polylines_coords'])) {
+    $polylines = getlocations_get_polyline_settings($defaults);
+    if ($polylines) {
+      $polyline_settings = array(
+        $mapid => $polylines,
+      );
+      drupal_add_js(array('getlocations_leaflet_polylines' => $polyline_settings), 'setting');
+      drupal_add_js($getlocations_leaflet_paths['getlocations_leaflet_polylines_path']);
+    }
+  }
+
+  // geojson
+  if ($defaults['geojson_enable'] && !empty($defaults['geojson_data']) && $geojson_path = getlocations_get_geojson_path() ) {
+    drupal_add_js($geojson_path);
+    $geojson_settings = array(
+      $mapid => array(
+        'geojson_data' => $defaults['geojson_data'],
+        'geojson_options' => $defaults['geojson_options'],
+      )
+    );
+    drupal_add_js(array('getlocations_leaflet_geojson' => $geojson_settings), 'setting');
+    drupal_add_js($getlocations_leaflet_paths['getlocations_leaflet_geojson_path']);
+  }
+
+  return $map_settings;
+}
+
+/**
+ * Function
+ *
+ * @param
+ *
+ * @return
+ *   Returns
+ *
+ */
+function getlocations_leaflet_js_settings_do($defaults, $mapid) {
+
+  $settings = array(
+    $mapid => $defaults
+  );
+  drupal_add_js(array('getlocations_leaflet' => $settings), 'setting');
+
+}
+
+/**
+ * Function
+ *
+ * @param
+ *
+ * @return
+ *   Returns
+ *
+ */
+function getlocations_leaflet_get_icondata($reset = FALSE) {
+
+  static $icons;
+  if (is_array($icons) && !$reset) {
+    return $icons;
+  }
+
+  $icons = cache_get('getlocations_leaflet_icondata');
+  if ($icons) {
+    $icons = $icons->data;
+  }
+
+  if ($reset || !$icons) {
+    module_load_include('inc', 'getlocations_leaflet', 'getlocations_leaflet.markerinfo');
+    $icons = _getlocations_leaflet_get_icondata();
+  }
+  if ($icons) {
+    cache_set('getlocations_leaflet_icondata', $icons, 'cache');
+  }
+  return $icons;
+
+}
+
+/**
+ * Function
+ *
+ * @param
+ *
+ * @return
+ *   Returns
+ *
+ */
+function getlocations_leaflet_regenerate_markers() {
+  $icons = getlocations_leaflet_get_icondata(TRUE);
+  if (! $icons) {
+    // no markers found
+    drupal_set_message(t('No markers found, you need to install some markers, please see the project page for details.'), 'error');
+    watchdog('getlocations_leaflet', 'No markers found.', array(), WATCHDOG_ERROR);
+    return FALSE;
+  }
+  return TRUE;
+}
+
+/**
+ * Function
+ *
+ * @param
+ *
+ * @return
+ *   Returns
+ *
+ */
+function getlocations_leaflet_get_marker($key) {
+  $icons = getlocations_leaflet_get_icondata();
+  if (isset($icons[$key])) {
+    return $icons[$key];
+  }
+  return FALSE;
+}
+
+/**
+ * Function
+ *
+ * @param
+ *
+ * @return
+ *   Returns
+ *
+ */
+function getlocations_leaflet_marker_list() {
+  $icons = getlocations_leaflet_get_icondata();
+  if (! $icons) {
+    // no markers found
+    drupal_set_message(t('No markers found, you need to install some markers, please see the project page for details.'), 'error');
+    watchdog('getlocations_leaflet', 'No markers found.', array(), WATCHDOG_ERROR);
+    return FALSE;
+  }
+  $data = array();
+  foreach ($icons AS $k => $v) {
+    $data[$k] = $v['name'];
+  }
+}
+
+/**
+ * Function
+ *
+ * @param
+ *
+ * @return
+ *   Returns
+ *
+ */
+function getlocations_leaflet_controlpositions($dd = TRUE) {
+  if ($dd) {
+    $controlpositions = array(
+      ''   => t('Default'),
+      'topleft' => t('Top Left'),
+      'topright' => t('Top Right'),
+      'bottomright' => t('Bottom Right'),
+      'bottomleft' => t('Bottom Left'),
+    );
+  }
+  else {
+    $controlpositions = array('topleft', 'topright', 'bottomright', 'bottomleft');
+  }
+  return $controlpositions;
+}
+
+/**
+ * Get all available Leaflet map definitions.
+ *
+ * Derived from the leaflet module
+ *
+ * @param string $map
+ */
+function getlocations_leaflet_map_get_info($map = NULL) {
+  static $drupal_static_fast;
+  if (!isset($drupal_static_fast)) {
+    $drupal_static_fast['getlocations_leaflet_map_info'] = &drupal_static(__FUNCTION__);
+  }
+  $map_info = &$drupal_static_fast['getlocations_leaflet_map_info'];
+
+  if (empty($map_info)) {
+    if ($cache = cache_get("getlocations_leaflet_map_info")) {
+      $map_info = $cache->data;
+    }
+    else {
+      $map_info = module_invoke_all('getlocations_leaflet_map_info');
+
+      // Let other modules alter the map info.
+      drupal_alter('getlocations_leaflet_map_info', $map_info);
+
+      cache_set("getlocations_leaflet_map_info", $map_info);
+    }
+  }
+
+  if (empty($map)) {
+    return $map_info;
+  }
+  elseif (isset($map_info[$map])) {
+    return $map_info[$map];
+  }
+}
+
+/**
+ * Implements hook_getlocations_leaflet_map_info().
+ *
+ */
+function getlocations_leaflet_getlocations_leaflet_map_info() {
+
+  $map_info = array(
+    'Getlocations OSM' => array(
+      'label' => 'Getlocations OSM',
+      'description' => t('Getlocations Leaflet maps.'),
+      'map_opts' => array(
+        'dragging'                   => TRUE,
+        'touchZoom'                  => TRUE,
+        'scrollWheelZoom'            => TRUE,
+        'doubleClickZoom'            => TRUE,
+        'zoomControl'                => TRUE,
+        'attributionControl'         => TRUE,
+        'trackResize'                => TRUE,
+        'fadeAnimation'              => TRUE,
+        'zoomAnimation'              => TRUE,
+        'closePopupOnClick'          => TRUE,
+        'layerControl'               => TRUE,
+        'minZoom'                    => 0,
+        'maxZoom'                    => 18,
+      ),
+      'map_settings' => array(
+        'zoomcontrolposition'        => '',
+        'attributioncontrolposition' => '',
+        'layercontrolposition'       => '',
+        'scaleControl'               => FALSE,
+        'scalecontrolposition'       => '',
+        'scalecontrolunits'          => '',
+        'markeraction'               => '',
+      ),
+      'map_layers' => array(
+        'OpenStreetMap.Mapnik' => array(
+          'label' => t('OpenStreetMap Default'),
+          'type' => 'base',
+        ),
+        'OpenStreetMap.BlackAndWhite' => array(
+          'label' => t('OpenStreetMap Black and White'),
+          'type' => 'base',
+        ),
+        'OpenStreetMap.DE' => array(
+          'label' => t('OpenStreetMap German Style'),
+          'type' => 'base',
+        ),
+        'OpenStreetMap.HOT' => array(
+          'label' => t('OpenStreetMap H.O.T'),
+          'type' => 'base',
+        ),
+        'Thunderforest.OpenCycleMap' => array(
+          'label' => t('Thunderforest OpenCycleMap'),
+          'type' => 'base',
+        ),
+        'Thunderforest.Transport' => array(
+          'label' => t('Thunderforest Transport'),
+          'type' => 'base',
+        ),
+        'Thunderforest.Landscape' => array(
+          'label' => t('Thunderforest Landscape'),
+          'type' => 'base',
+        ),
+        'Thunderforest.Outdoors' => array(
+          'label' => t('Thunderforest Outdoors'),
+          'type' => 'base',
+        ),
+        'MapQuestOpen.OSM' => array(
+          'label' => t('MapQuestOpen OSM'),
+          'type' => 'base',
+        ),
+        'MapQuestOpen.Aerial' => array(
+          'label' => t('MapQuestOpen Aerial'),
+          'type' => 'base',
+        ),
+        'Stamen.Toner' => array(
+          'label' => t('Stamen Toner'),
+          'type' => 'base',
+        ),
+        'Stamen.TonerBackground' => array(
+          'label' => t('Stamen Toner Background'),
+          'type' => 'base',
+        ),
+        'Stamen.TonerHybrid' => array(
+          'label' => t('Stamen Toner Hybrid'),
+          'type' => 'base',
+        ),
+        'Stamen.TonerLines' => array(
+          'label' => t('Stamen Toner Lines'),
+          'type' => 'base',
+        ),
+        'Stamen.TonerLabels' => array(
+          'label' => t('Stamen Toner Labels'),
+          'type' => 'base',
+        ),
+        'Stamen.TonerLite' => array(
+          'label' => t('Stamen Toner Lite'),
+          'type' => 'base',
+        ),
+        'Stamen.Terrain' => array(
+          'label' => t('Stamen Terrain'),
+          'type' => 'base',
+        ),
+        'Stamen.TerrainBackground' => array(
+          'label' => t('Stamen Terrain Background'),
+          'type' => 'base',
+        ),
+        'Stamen.Watercolor' => array(
+          'label' => t('Stamen Watercolor'),
+          'type' => 'base',
+        ),
+        'Esri.WorldStreetMap' => array(
+          'label' => t('Esri WorldStreetMap'),
+          'type' => 'base',
+        ),
+        'Esri.DeLorme' => array(
+          'label' => t('Esri DeLorme'),
+          'type' => 'base',
+        ),
+        'Esri.WorldTopoMap' => array(
+          'label' => t('Esri WorldTopoMap'),
+          'type' => 'base',
+        ),
+        'Esri.WorldImagery' => array(
+          'label' => t('Esri WorldImagery'),
+          'type' => 'base',
+        ),
+        'Esri.WorldTerrain' => array(
+          'label' => t('Esri WorldTerrain'),
+          'type' => 'base',
+        ),
+        'Esri.WorldShadedRelief' => array(
+          'label' => t('Esri WorldShadedRelief'),
+          'type' => 'base',
+        ),
+        'Esri.WorldPhysical' => array(
+          'label' => t('Esri WorldPhysical'),
+          'type' => 'base',
+        ),
+        'Esri.OceanBasemap' => array(
+          'label' => t('Esri OceanBasemap'),
+          'type' => 'base',
+        ),
+        'Esri.NatGeoWorldMap' => array(
+          'label' => t('Esri NatGeoWorldMap'),
+          'type' => 'base',
+        ),
+        'Esri.WorldGrayCanvas' => array(
+          'label' => t('Esri WorldGrayCanvas'),
+          'type' => 'base',
+        ),
+        'Acetate.all' => array(
+          'label' => t('Acetate all'),
+          'type' => 'base',
+        ),
+        'Acetate.basemap' => array(
+          'label' => t('Acetate basemap'),
+          'type' => 'base',
+        ),
+        'Acetate.terrain' => array(
+          'label' => t('Acetate terrain'),
+          'type' => 'base',
+        ),
+        'Acetate.foreground' => array(
+          'label' => t('Acetate foreground'),
+          'type' => 'base',
+        ),
+        'Acetate.roads' => array(
+          'label' => t('Acetate roads'),
+          'type' => 'base',
+        ),
+        'Acetate.labels' => array(
+          'label' => t('Acetate labels'),
+          'type' => 'base',
+        ),
+        'Acetate.hillshading' => array(
+          'label' => t('Acetate hillshading'),
+          'type' => 'base',
+        ),
+        'OpenSeaMap' => array(
+          'label' => t('OpenSeaMap Overlay'),
+          'type' => 'overlay',
+        ),
+        'OpenWeatherMap.Clouds' => array(
+          'label' => t('OpenWeatherMap Clouds Overlay'),
+          'type' => 'overlay',
+        ),
+        'OpenWeatherMap.CloudsClassic' => array(
+          'label' => t('OpenWeatherMap Clouds Classic Overlay'),
+          'type' => 'overlay',
+        ),
+        'OpenWeatherMap.Precipitation' => array(
+          'label' => t('OpenWeatherMap Precipitation Overlay'),
+          'type' => 'overlay',
+        ),
+        'OpenWeatherMap.PrecipitationClassic' => array(
+          'label' => t('OpenWeatherMap Precipitation Classic Overlay'),
+          'type' => 'overlay',
+        ),
+        'OpenWeatherMap.Rain' => array(
+          'label' => t('OpenWeatherMap Rain Overlay'),
+          'type' => 'overlay',
+        ),
+        'OpenWeatherMap.RainClassic' => array(
+          'label' => t('OpenWeatherMap Rain Classic Overlay'),
+          'type' => 'overlay',
+        ),
+        'OpenWeatherMap.Pressure' => array(
+          'label' => t('OpenWeatherMap Pressure Overlay'),
+          'type' => 'overlay',
+        ),
+        'OpenWeatherMap.PressureContour' => array(
+          'label' => t('OpenWeatherMap PressureContour Overlay'),
+          'type' => 'overlay',
+        ),
+        'OpenWeatherMap.Wind' => array(
+          'label' => t('OpenWeatherMap Wind Overlay'),
+          'type' => 'overlay',
+        ),
+        'OpenWeatherMap.Temperature' => array(
+          'label' => t('OpenWeatherMap Temperature Overlay'),
+          'type' => 'overlay',
+        ),
+        'OpenWeatherMap.Snow' => array(
+          'label' => t('OpenWeatherMap Snow Overlay'),
+          'type' => 'overlay',
+        ),
+      ),
+    ),
+  );
+
+  return $map_info;
+}
+
+/**
+ * Function
+ *
+ * @param
+ *
+ * @return
+ *   Returns
+ *
+ */
+function getlocations_leaflet_defaults() {
+  $getlocations_defaults = getlocations_defaults();
+  $defaults = array(
+    'width'                      => $getlocations_defaults['width'],
+    'height'                     => $getlocations_defaults['height'],
+    'zoom'                       => $getlocations_defaults['zoom'],
+    'minzoom_map'                => $getlocations_defaults['minzoom_map'],
+    'maxzoom_map'                => $getlocations_defaults['maxzoom_map'],
+    'latlong'                    => $getlocations_defaults['latlong'],
+    'nodezoom'                   => $getlocations_defaults['nodezoom'],
+    'polygons_enable'            => $getlocations_defaults['polygons_enable'],
+    'polygons_strokecolor'       => $getlocations_defaults['polygons_strokecolor'],
+    'polygons_strokeopacity'     => $getlocations_defaults['polygons_strokeopacity'],
+    'polygons_strokeweight'      => $getlocations_defaults['polygons_strokeweight'],
+    'polygons_fillcolor'         => $getlocations_defaults['polygons_fillcolor'],
+    'polygons_fillopacity'       => $getlocations_defaults['polygons_fillopacity'],
+    'polygons_coords'            => $getlocations_defaults['polygons_coords'],
+    'polygons_clickable'         => $getlocations_defaults['polygons_clickable'],
+    'polygons_message'           => $getlocations_defaults['polygons_message'],
+    'rectangles_enable'          => $getlocations_defaults['rectangles_enable'],
+    'rectangles_strokecolor'     => $getlocations_defaults['rectangles_strokecolor'],
+    'rectangles_strokeopacity'   => $getlocations_defaults['rectangles_strokeopacity'],
+    'rectangles_strokeweight'    => $getlocations_defaults['rectangles_strokeweight'],
+    'rectangles_fillcolor'       => $getlocations_defaults['rectangles_fillcolor'],
+    'rectangles_fillopacity'     => $getlocations_defaults['rectangles_fillopacity'],
+    'rectangles_coords'          => $getlocations_defaults['rectangles_coords'],
+    'rectangles_clickable'       => $getlocations_defaults['rectangles_clickable'],
+    'rectangles_message'         => $getlocations_defaults['rectangles_message'],
+    'rectangles_apply'           => $getlocations_defaults['rectangles_apply'],
+    'rectangles_dist'            => $getlocations_defaults['rectangles_dist'],
+    'circles_enable'             => $getlocations_defaults['circles_enable'],
+    'circles_strokecolor'        => $getlocations_defaults['circles_strokecolor'],
+    'circles_strokeopacity'      => $getlocations_defaults['circles_strokeopacity'],
+    'circles_strokeweight'       => $getlocations_defaults['circles_strokeweight'],
+    'circles_fillcolor'          => $getlocations_defaults['circles_fillcolor'],
+    'circles_fillopacity'        => $getlocations_defaults['circles_fillopacity'],
+    'circles_coords'             => $getlocations_defaults['circles_coords'],
+    'circles_clickable'          => $getlocations_defaults['circles_clickable'],
+    'circles_message'            => $getlocations_defaults['circles_message'],
+    'circles_radius'             => $getlocations_defaults['circles_radius'],
+    'circles_apply'              => $getlocations_defaults['circles_apply'],
+    'polylines_enable'           => $getlocations_defaults['polylines_enable'],
+    'polylines_strokecolor'      => $getlocations_defaults['polylines_strokecolor'],
+    'polylines_strokeopacity'    => $getlocations_defaults['polylines_strokeopacity'],
+    'polylines_strokeweight'     => $getlocations_defaults['polylines_strokeweight'],
+    'polylines_coords'           => $getlocations_defaults['polylines_coords'],
+    'polylines_clickable'        => $getlocations_defaults['polylines_clickable'],
+    'polylines_message'          => $getlocations_defaults['polylines_message'],
+    // categories
+    'category_method'            => $getlocations_defaults['category_method'],
+    'category_term_reference_field' => $getlocations_defaults['category_term_reference_field'],
+    'category_showhide_buttons'  => $getlocations_defaults['category_showhide_buttons'],
+    'categories'                 => $getlocations_defaults['categories'],
+    'returnlink_page_enable'     => $getlocations_defaults['returnlink_page_enable'],
+    'returnlink_page_link'       => $getlocations_defaults['returnlink_page_link'],
+    'returnlink_user_enable'     => $getlocations_defaults['returnlink_user_enable'],
+    'returnlink_user_link'       => $getlocations_defaults['returnlink_user_link'],
+    'returnlink_term_enable'     => $getlocations_defaults['returnlink_term_enable'],
+    'returnlink_term_link'       => $getlocations_defaults['returnlink_term_link'],
+    'returnlink_comment_enable'  => $getlocations_defaults['returnlink_comment_enable'],
+    'returnlink_comment_link'    => $getlocations_defaults['returnlink_comment_link'],
+    'geojson_enable'             => $getlocations_defaults['geojson_enable'],
+    'geojson_data'               => $getlocations_defaults['geojson_data'],
+    'geojson_options'            => $getlocations_defaults['geojson_options'],
+    'fullscreen'                 => $getlocations_defaults['fullscreen'],
+  );
+
+  $newdefaults = getlocations_adjust_vars($getlocations_defaults, $defaults);
+  $newdefaults['dragging']           = $getlocations_defaults['draggable'];
+  $newdefaults['scrollWheelZoom']    = $getlocations_defaults['scrollwheel'];
+  $newdefaults['doubleClickZoom']    = ($getlocations_defaults['nodoubleclickzoom'] ? 0 : 1);
+  $newdefaults['zoomControl']        = ($getlocations_defaults['controltype'] == 'none' ? 0 : 1);
+  $newdefaults['touchZoom']          = 1;
+  $newdefaults['attributionControl'] = 1;
+  $newdefaults['trackResize']        = 1;
+  $newdefaults['fadeAnimation']      = 1;
+  $newdefaults['zoomAnimation']      = 1;
+  $newdefaults['closePopupOnClick']  = 1;
+  $newdefaults['layerControl']       = 0;
+
+  $newdefaults['scaleControl']       = $getlocations_defaults['scale'];
+  $newdefaults['scalecontrolposition']       = '';
+  $newdefaults['scalecontrolunits']          = '';
+  $newdefaults['zoomcontrolposition']        = '';
+  $newdefaults['attributioncontrolposition'] = '';
+  $newdefaults['layercontrolposition']       = '';
+  $newdefaults['layercontrol_mark_ov']       = 9;
+  $newdefaults['layercontrol_mark_ov_label'] = t('Locations');
+
+  $newdefaults['layercontrol_circ_ov']       = 9;
+  $newdefaults['layercontrol_circ_ov_label'] = t('Circles');
+
+  $newdefaults['layercontrol_polyl_ov']       = 9;
+  $newdefaults['layercontrol_polyl_ov_label'] = t('Lines');
+
+  $newdefaults['layercontrol_polyg_ov']       = 9;
+  $newdefaults['layercontrol_polyg_ov_label'] = t('Polygons');
+
+  $newdefaults['layercontrol_rect_ov']       = 9;
+  $newdefaults['layercontrol_rect_ov_label'] = t('Rectangles');
+
+  $newdefaults['fullscreenposition']         = '';
+  $newdefaults['markeraction']               = '';
+  $newdefaults['markercluster']              = 0;
+  $newdefaults['graticule']                  = 0;
+  $newdefaults['graticule_color']            = '#333';
+  $newdefaults['graticule_opacity']          = 1;
+  $newdefaults['graticule_weight']           = 1;
+  $newdefaults['graticule_interval']         = 20;
+  $newdefaults['pancontrol']                 = 0;
+  $newdefaults['pancontrolposition']         = '';
+  $newdefaults['zoomslider']                 = 0;
+  $newdefaults['zoomsliderposition']         = '';
+  $newdefaults['mouseposition']              = 0;
+  $newdefaults['mouseposition_position']     = '';
+  $newdefaults['mouseposition_display_dms']  = 0;
+  $newdefaults['minimap']                    = 0;
+
+  $newdefaults['awesome']                     = 0;
+  $newdefaults['awesome_icon']                = 'fa-home';
+  $newdefaults['awesome_icon_color_selector'] = 'white';
+  $newdefaults['awesome_icon_color']          = '';
+  $newdefaults['awesome_icon_spin']           = FALSE;
+  $newdefaults['awesome_marker_color']        = 'blue';
+  $newdefaults['awesome_icon_type']           = 'b';
+  $newdefaults['awesome_icon_size']           = '';
+  $newdefaults['awesome_icon_flip']           = '';
+
+  $newdefaults['node_marker_awesome_icon']                = '';
+  $newdefaults['node_marker_awesome_icon_color_selector'] = '';
+  $newdefaults['node_marker_awesome_icon_color']          = '';
+  $newdefaults['node_marker_awesome_icon_spin']           = FALSE;
+  $newdefaults['node_marker_awesome_marker_color']        = '';
+  $newdefaults['node_marker_awesome_icon_type']           = 'b';
+  $newdefaults['node_marker_awesome_icon_size']           = '';
+  $newdefaults['node_marker_awesome_icon_flip']           = '';
+
+  $newdefaults['user_marker_awesome_icon']                = '';
+  $newdefaults['user_marker_awesome_icon_color_selector'] = '';
+  $newdefaults['user_marker_awesome_icon_color']          = '';
+  $newdefaults['user_marker_awesome_icon_spin']           = FALSE;
+  $newdefaults['user_marker_awesome_marker_color']        = '';
+  $newdefaults['user_marker_awesome_icon_type']           = 'b';
+  $newdefaults['user_marker_awesome_icon_size']           = '';
+  $newdefaults['user_marker_awesome_icon_flip']           = '';
+
+  $newdefaults['term_marker_awesome_icon']                = '';
+  $newdefaults['term_marker_awesome_icon_color_selector'] = '';
+  $newdefaults['term_marker_awesome_icon_color']          = '';
+  $newdefaults['term_marker_awesome_icon_spin']           = FALSE;
+  $newdefaults['term_marker_awesome_marker_color']        = '';
+  $newdefaults['term_marker_awesome_icon_type']           = 'b';
+  $newdefaults['term_marker_awesome_icon_size']           = '';
+  $newdefaults['term_marker_awesome_icon_flip']           = '';
+
+  $newdefaults['vocabulary_marker_awesome_icon']                = '';
+  $newdefaults['vocabulary_marker_awesome_icon_color_selector'] = '';
+  $newdefaults['vocabulary_marker_awesome_icon_color']          = '';
+  $newdefaults['vocabulary_marker_awesome_icon_spin']           = FALSE;
+  $newdefaults['vocabulary_marker_awesome_marker_color']        = '';
+  $newdefaults['vocabulary_marker_awesome_icon_type']           = 'b';
+  $newdefaults['vocabulary_marker_awesome_icon_size']           = '';
+  $newdefaults['vocabulary_marker_awesome_icon_flip']           = '';
+
+  $newdefaults['comment_marker_awesome_icon']                = '';
+  $newdefaults['comment_marker_awesome_icon_color_selector'] = '';
+  $newdefaults['comment_marker_awesome_icon_color']          = '';
+  $newdefaults['comment_marker_awesome_icon_spin']           = FALSE;
+  $newdefaults['comment_marker_awesome_marker_color']        = '';
+  $newdefaults['comment_marker_awesome_icon_type']           = 'b';
+  $newdefaults['comment_marker_awesome_icon_size']           = '';
+  $newdefaults['comment_marker_awesome_icon_flip']           = '';
+
+  $newdefaults['marker_type'] = 'gg'; // or 'fa'
+
+  $newdefaults['default_baselayer'] = 'OpenStreetMap.Mapnik';
+
+  $settings = variable_get('getlocations_leaflet_defaults', '');
+
+  $newdefaults['baselayers'] = (isset($settings['baselayers']) && ! empty($settings['baselayers']) ? $settings['baselayers'] : array('OpenStreetMap.Mapnik'));
+
+  $settings = getlocations_adjust_vars($newdefaults, $settings);
+
+  return $settings;
+}
+
+/**
+ * Function
+ *
+ * @param
+ *
+ * @return
+ *   Returns
+ *
+ */
+function getlocations_leaflet_plugins() {
+  $defaults = array(
+    'markercluster_enable' => 0,
+    'fullscreen_enable'    => 0,
+    'graticule_enable'     => 0,
+    'pancontrol_enable'    => 0,
+    'zoomslider_enable'    => 0,
+    'awesome_enable'       => 0,
+    'mouseposition_enable' => 0,
+    'minimap_enable'       => 0,
+  );
+  $settings = variable_get('getlocations_leaflet_plugins', $defaults);
+  $return = getlocations_adjust_vars($defaults, $settings);
+  return $return;
+}
+
+/**
+ * Function
+ *
+ * @param
+ *
+ * @return
+ *   Returns
+ *
+ */
+function getlocations_leaflet_get_map_layers($map_settings) {
+  $map_layers = $map_settings['map_layers'];
+  $cloudmade_info = variable_get('getlocations_leaflet_cloudmade', '');
+  if (! empty($cloudmade_info)) {
+    if (isset($cloudmade_info['cloudmade_key']) && ! empty($cloudmade_info['cloudmade_key'])) {
+      $cloudmade_key = $cloudmade_info['cloudmade_key'];
+      if (isset($cloudmade_info['cloudmade_maps']) && is_array($cloudmade_info['cloudmade_maps']) ) {
+        $res = getlocations_leaflet_get_cloudmade_resolutions();
+        $add = array();
+        foreach ($cloudmade_info['cloudmade_maps'] AS $k => $map) {
+          $style_id = $map['style_id'];
+          $style_name = $map['style_name'];
+          $style_token = $map['style_token'];
+          $query = '';
+          if (! empty($style_token)) {
+            $query = '?token=' . $style_token;
+          }
+          $add[$style_name] = array(
+            'label' => $res[$style_name],
+            'type' => 'base',
+            'options' => array(
+              'apiKey' => $cloudmade_key,
+              'styleID' => $style_id,
+              'styleToken' => $query,
+            ),
+          );
+        }
+        if (count($add)) {
+          $map_layers += $add;
+        }
+      }
+    }
+  }
+
+  $map_settings['map_layers'] = $map_layers;
+  return $map_settings;
+}
+
+/**
+ * Function
+ *
+ * @param
+ *
+ * @return
+ *   Returns
+ *
+ */
+function getlocations_leaflet_get_cloudmade_resolutions() {
+  $output = array(
+    'standardResolution1' => t('Standard Resolution 1'),
+    'standardResolution2' => t('Standard Resolution 2'),
+    'standardResolution3' => t('Standard Resolution 3'),
+    'standardResolution4' => t('Standard Resolution 4'),
+    'standardResolution5' => t('Standard Resolution 5'),
+    'highResolution1' => t('High Resolution 1'),
+    'highResolution2' => t('High Resolution 2'),
+    'highResolution3' => t('High Resolution 3'),
+    'highResolution4' => t('High Resolution 4'),
+    'highResolution5' => t('High Resolution 5'),
+    'highResolution1s' => t('High Resolution 1 Small tile'),
+    'highResolution2s' => t('High Resolution 2 Small tile'),
+    'highResolution3s' => t('High Resolution 3 Small tile'),
+    'highResolution4s' => t('High Resolution 4 Small tile'),
+    'highResolution5s' => t('High Resolution 5 Small tile'),
+  );
+  return $output;
+}
+
+/**
+ * Function
+ *
+ * @param
+ *
+ * @return
+ *   Returns
+ *
+ */
+function getlocations_leaflet_display_options_form($defaults, $admin = FALSE) {
+  $form = array();
+
+  $controlpositions = getlocations_leaflet_controlpositions();
+  $getlocations_leaflet_plugins = getlocations_leaflet_plugins();
+
+  $form['nodezoom'] = getlocations_element_map_zoom(
+    t('Default Zoom for Single location'),
+    $defaults['nodezoom'],
+    t('The Default zoom level for a single marker.')
+  );
+
+  $form['scrollWheelZoom'] = getlocations_element_map_checkbox(
+    t('Scrollwheel'),
+    $defaults['scrollWheelZoom'],
+    t('Enable scrollwheel zooming.')
+  );
+  $form['touchZoom'] = getlocations_element_map_checkbox(
+    t('Touch Zoom'),
+    $defaults['touchZoom'],
+    t('Enable touch zooming. Applies to touchscreens.')
+  );
+
+  $form['dragging'] = getlocations_element_map_checkbox(
+    t('Draggable'),
+    $defaults['dragging'],
+    t('Enable dragging the map.')
+  );
+
+  $form['doubleClickZoom'] = getlocations_element_map_checkbox(
+    t('DoubleClick Zoom'),
+    $defaults['doubleClickZoom'],
+    t('Enable DoubleClick Zooming.')
+  );
+
+  $form['scaleControl'] = getlocations_element_map_checkbox(
+    t('Scale'),
+    $defaults['scaleControl'],
+    t('Show scale.')
+  );
+  $form['scaleControl']['#suffix'] = '<div id="wrap-getlocations-scalecontrol">';
+  $form['scalecontrolunits'] = getlocations_element_dd(
+    t('Distance Units'),
+    $defaults['scalecontrolunits'],
+    array('' => t('Defaults'), 'metric' => t('Metric'), 'imperial' => t('Imperial'))
+  );
+  $form['scalecontrolposition'] = getlocations_element_dd(
+    t('Position of Scale Control'),
+    $defaults['scalecontrolposition'],
+    $controlpositions
+  );
+  $form['scalecontrolposition']['#suffix'] = '</div>';
+
+  $form['zoomControl'] = getlocations_element_map_checkbox(
+    t('Zoom Control'),
+    $defaults['zoomControl'],
+    t('Enable Zoom Control on the map.')
+  );
+  $form['zoomControl']['#suffix'] = '<div id="wrap-getlocations-zoomcontrol">';
+  $form['zoomcontrolposition'] = getlocations_element_dd(
+    t('Position of Zoom Control'),
+    $defaults['zoomcontrolposition'],
+    $controlpositions
+  );
+  $form['zoomcontrolposition']['#suffix'] = '</div>';
+
+  $form['attributionControl'] = getlocations_element_map_checkbox(
+    t('Attribution Control'),
+    $defaults['attributionControl'],
+    t('Enable Attribution Control on the map.')
+  );
+  $form['attributionControl']['#suffix'] = '<div id="wrap-getlocations-attributioncontrol">';
+  $form['attributioncontrolposition'] = getlocations_element_dd(
+    t('Position of Attribution Control'),
+    $defaults['attributioncontrolposition'],
+    $controlpositions
+  );
+  $form['attributioncontrolposition']['#suffix'] = '</div>';
+
+  $form['layerControl'] = getlocations_element_map_checkbox(
+    t('Layer Control'),
+    $defaults['layerControl'],
+    t('Enable Layer Control on the map.')
+  );
+  $form['layerControl']['#suffix'] = '<div id="wrap-getlocations-layercontrol">';
+
+  if ($getlocations_leaflet_plugins['minimap_enable']) {
+    $form['minimap'] = getlocations_element_map_checkbox(
+      t('Minimap Enhanced Layer Control'),
+      $defaults['minimap']
+    );
+  }
+  else {
+    $form['minimap'] = array('#type' => 'value', '#value' => 0);
+  }
+
+  $form['layercontrol_mark_ov'] = getlocations_element_map_checkbox(
+    t('Layer Control Marker Overlay'),
+    $defaults['layercontrol_mark_ov'],
+    t('Add a checkbox to switch Markers on and off to the Layer Control.')
+  );
+  $form['layercontrol_mark_ov_label'] = getlocations_element_map_tf(
+    t('Layer Control Marker Overlay Label'),
+    $defaults['layercontrol_mark_ov_label'],
+    t('The label to display on the Layer Control.'),
+    20
+  );
+
+  $form['layercontrol_circ_ov'] = getlocations_element_map_checkbox(
+    t('Layer Control Circles Overlay'),
+    $defaults['layercontrol_circ_ov'],
+    t('Add a checkbox to switch Circles on and off to the Layer Control.')
+  );
+  $form['layercontrol_circ_ov_label'] = getlocations_element_map_tf(
+    t('Layer Control Circles Overlay Label'),
+    $defaults['layercontrol_circ_ov_label'],
+    t('The label to display on the Layer Control.'),
+    20
+  );
+
+  $form['layercontrol_polyl_ov'] = getlocations_element_map_checkbox(
+    t('Layer Control Lines Overlay'),
+    $defaults['layercontrol_polyl_ov'],
+    t('Add a checkbox to switch Lines on and off to the Layer Control.')
+  );
+  $form['layercontrol_polyl_ov_label'] = getlocations_element_map_tf(
+    t('Layer Control Lines Overlay Label'),
+    $defaults['layercontrol_polyl_ov_label'],
+    t('The label to display on the Layer Control.'),
+    20
+  );
+
+  $form['layercontrol_polyg_ov'] = getlocations_element_map_checkbox(
+    t('Layer Control Polygons Overlay'),
+    $defaults['layercontrol_polyg_ov'],
+    t('Add a checkbox to switch Polygons on and off to the Layer Control.')
+  );
+  $form['layercontrol_polyg_ov_label'] = getlocations_element_map_tf(
+    t('Layer Control Polygons Overlay Label'),
+    $defaults['layercontrol_polyg_ov_label'],
+    t('The label to display on the Layer Control.'),
+    20
+  );
+
+  $form['layercontrol_rect_ov'] = getlocations_element_map_checkbox(
+    t('Layer Control Rectangles Overlay'),
+    $defaults['layercontrol_rect_ov'],
+    t('Add a checkbox to switch Rectangles on and off to the Layer Control.')
+  );
+  $form['layercontrol_rect_ov_label'] = getlocations_element_map_tf(
+    t('Layer Control Rectangles Overlay Label'),
+    $defaults['layercontrol_rect_ov_label'],
+    t('The label to display on the Layer Control.'),
+    20
+  );
+
+  $form['layercontrolposition'] = getlocations_element_dd(
+    t('Position of Layer Control'),
+    $defaults['layercontrolposition'],
+    $controlpositions
+  );
+  $form['layercontrolposition']['#suffix'] = '</div>';
+
+  // baselayers
+  $map_settings = getlocations_leaflet_map_get_info('Getlocations OSM');
+  $map_settings = getlocations_leaflet_get_map_layers($map_settings);
+  $map_layers = $map_settings['map_layers'];
+
+  // reconfigure $defaults['baselayers']
+  $old_baselayers = $defaults['baselayers'];
+  $defaults['baselayers'] = array();
+  $default_baselayer_opts = array();
+  foreach ($map_layers AS $k => $v) {
+    if ($k == $defaults['default_baselayer']) {
+      $defaults['baselayers'][$k] = (isset($old_baselayers[$k]) ? $old_baselayers[$k] : 1);
+    }
+    else {
+      $defaults['baselayers'][$k] = (isset($old_baselayers[$k]) ? $old_baselayers[$k] : 0);
+    }
+    // make a list of enable baselayers for a dropdown
+    if (isset($old_baselayers[$k]) && $old_baselayers[$k]) {
+      if ($map_layers[$k]['type'] == 'base') {
+        $default_baselayer_opts[$k] = $map_layers[$k]['label'];
+      }
+    }
+  }
+
+  if (count($default_baselayer_opts) > 1) {
+    $form['default_baselayer'] = getlocations_element_dd(
+      t('Default Map'),
+      $defaults['default_baselayer'],
+      $default_baselayer_opts
+    );
+
+  }
+  else {
+    $form['default_baselayer'] = array(
+      '#type' => 'value',
+      '#value' => $defaults['default_baselayer']
+    );
+  }
+
+
+  $form['baselayers'] =  array(
+    '#type' => 'fieldset',
+    '#title' => t('Enable map types'),
+    '#description' => t('Select which maps you want to be available. You must select at least one'),
+    '#collapsible' => TRUE,
+    '#collapsed' => FALSE,
+  );
+  foreach ($defaults['baselayers'] AS $key => $value) {
+    $label = (isset($map_layers[$key]['label']) ? $map_layers[$key]['label'] : $key);
+    $form['baselayers'][$key] = getlocations_element_map_checkbox(
+      $label,
+      $defaults['baselayers'][$key],
+      (isset($map_layers[$key]['description']) ? $map_layers[$key]['description'] : '')
+    );
+  }
+
+  $form['trackResize'] = getlocations_element_map_checkbox(
+    t('Automatic Resizing'),
+    $defaults['trackResize'],
+    t('Enable Automatic Resizing of the map.')
+  );
+
+  $form['fadeAnimation'] = getlocations_element_map_checkbox(
+    t('fadeAnimation'),
+    $defaults['fadeAnimation'],
+    t('Enable fadeAnimation on the map.')
+  );
+
+  $form['zoomAnimation'] = getlocations_element_map_checkbox(
+    t('zoomAnimation'),
+    $defaults['zoomAnimation'],
+    t('Enable zoomAnimation on the map.')
+  );
+
+  $form['closePopupOnClick'] = getlocations_element_map_checkbox(
+    t('closePopupOnClick'),
+    $defaults['closePopupOnClick'],
+    t('Enable closePopupOnClick on the map.')
+  );
+
+  // plugins
+  if ($getlocations_leaflet_plugins['fullscreen_enable']) {
+    // fullscreen
+    $form['fullscreen'] = getlocations_element_map_checkbox(
+      t('Fullscreen'),
+      $defaults['fullscreen'],
+      t('Enable Fullscreen button on the map.')
+    );
+    $form['fullscreen']['#suffix'] = '<div id="getlocations-fullscreen-wrap">';
+    $form['fullscreenposition'] = getlocations_element_dd(
+      t('Position of Fullscreen Control'),
+      $defaults['fullscreenposition'],
+      $controlpositions
+    );
+    $form['fullscreenposition']['#suffix'] = '</div>';
+  }
+  else {
+    $form['fullscreen'] = array('#type' => 'value', '#value' => 0);
+    $form['fullscreenposition'] = array('#type' => 'value', '#value' => $defaults['fullscreenposition']);
+  }
+
+  if ($getlocations_leaflet_plugins['markercluster_enable']) {
+    $form['markercluster'] = getlocations_element_map_checkbox(
+      t('Marker Cluster'),
+      $defaults['markercluster'],
+      t('Enable markercluster on the map.')
+    );
+  }
+  else {
+    $form['markercluster'] = array('#type' => 'value', '#value' => 0);
+  }
+  if ($getlocations_leaflet_plugins['graticule_enable']) {
+    $form['graticule'] = getlocations_element_map_checkbox(
+      t('Graticule'),
+      $defaults['graticule'],
+      t('Enable a grid on the map.')
+    );
+    $form['graticule']['#suffix'] = '<div id="getlocations-graticule-wrap">';
+
+    $form['graticule_color'] =  getlocations_element_map_tf(
+      t('Graticule line color'),
+      $defaults['graticule_color'],
+      '',
+      10
+    );
+    $form['graticule_weight'] =  getlocations_element_map_tf(
+      t('Graticule line thickness'),
+      $defaults['graticule_weight'],
+      '',
+      5
+    );
+    $form['graticule_opacity'] =  getlocations_element_map_tf(
+      t('Graticule line opacity'),
+      $defaults['graticule_opacity'],
+      '',
+      5
+    );
+    $form['graticule_interval'] =  getlocations_element_map_tf(
+      t('Graticule interval'),
+      $defaults['graticule_interval'],
+      '',
+      5
+    );
+    $form['graticule_interval']['#suffix'] = '</div>';
+
+  }
+  else {
+    $form['graticule'] = array('#type' => 'value', '#value' => 0);
+  }
+
+  if ($getlocations_leaflet_plugins['mouseposition_enable']) {
+    $form['mouseposition'] = getlocations_element_map_checkbox(
+      t('Mouseposition'),
+      $defaults['mouseposition'],
+      t('Enable Mouseposition on the map.')
+    );
+    $form['mouseposition']['#suffix'] = '<div id="getlocations-mouseposition-wrap">';
+    $form['mouseposition_position'] = getlocations_element_dd(
+      t('Position of Mouse position Control'),
+      $defaults['mouseposition_position'],
+      $controlpositions
+    );
+    $form['mouseposition_display_dms'] = getlocations_element_map_checkbox(
+      t('Show Latitude/Longitude in Degrees, minutes, seconds'),
+      $defaults['mouseposition_display_dms'],
+      ''
+    );
+    $form['mouseposition_display_dms']['#suffix'] = '</div>';
+  }
+  else {
+    $form['mouseposition'] = array('#type' => 'value', '#value' => 0);
+  }
+
+  if ($getlocations_leaflet_plugins['pancontrol_enable']) {
+    $form['pancontrol'] = getlocations_element_map_checkbox(
+      t('Pancontrol'),
+      $defaults['pancontrol'],
+      t('Enable Pan control on the map.')
+    );
+    $form['pancontrol']['#suffix'] = '<div id="getlocations-pancontrol-wrap">';
+    $form['pancontrolposition'] = getlocations_element_dd(
+      t('Position of Pan Control'),
+      $defaults['pancontrolposition'],
+      $controlpositions
+    );
+    $form['pancontrolposition']['#suffix'] = '</div>';
+  }
+  else {
+    $form['pancontrol'] = array('#type' => 'value', '#value' => 0);
+  }
+
+  if ($getlocations_leaflet_plugins['zoomslider_enable']) {
+    $form['zoomslider'] = getlocations_element_map_checkbox(
+      t('Zoomslider'),
+      $defaults['zoomslider'],
+      t('Enable Zoom Slider on the map.')
+    );
+    $form['zoomslider']['#suffix'] = '<div id="getlocations-zoomslider-wrap">';
+    $form['zoomsliderposition'] = getlocations_element_dd(
+      t('Position of Zoomslider'),
+      $defaults['zoomsliderposition'],
+      $controlpositions
+    );
+    $form['zoomsliderposition']['#suffix'] = '</div>';
+  }
+  else {
+    $form['zoomslider'] = array('#type' => 'value', '#value' => 0);
+  }
+
+  $form['markeraction'] = getlocations_element_dd(
+    t('Marker action'),
+    $defaults['markeraction'],
+    array(
+      '' => t('None'),
+      'popup' => t('Popup'),
+      'link' => t('Link to content')
+    )
+  );
+
+  // shapes
+  $form += getlocations_shapes_form($defaults, '');
+
+  // geojson
+  $form += getlocations_geojson_form($defaults);
+  $form['geojson_options']['#type'] = 'hidden';
+
+  if ($getlocations_leaflet_plugins['awesome_enable']) {
+    $form['marker_type'] = getlocations_element_dd(
+      t('Default Marker type'),
+      $defaults['marker_type'],
+      array('gg' => t('Getlocations markers'), 'fa' => t('Awesome Fonts markers')),
+      t('If you change this setting, save the page and revisit the form to get the selected markerset.')
+    );
+    #if ($admin) {
+    #  $form['marker_type']['#suffix'] = '<div id="getlocations-awesome-wrap">';
+    #  $form += getlocations_leaflet_awesome_markers_elements_get($defaults);
+    #  $form['awesome_marker_color']['#suffix'] = '</div>';
+    #}
+    $form['awesome'] = array('#type' => 'value', '#value' => 1);
+  }
+  else {
+    $form['awesome_icon']                = array('#type' => 'value', '#value' => $defaults['awesome_icon']);
+    $form['awesome_icon_color_selector'] = array('#type' => 'value', '#value' => $defaults['awesome_icon_color_selector']);
+    $form['awesome_icon_color']          = array('#type' => 'value', '#value' => $defaults['awesome_icon_color']);
+    $form['awesome_marker_color']        = array('#type' => 'value', '#value' => $defaults['awesome_marker_color']);
+    $form['awesome_icon_type']           = array('#type' => 'value', '#value' => $defaults['awesome_icon_type']);
+    $form['awesome_icon_size']           = array('#type' => 'value', '#value' => $defaults['awesome_icon_size']);
+    $form['awesome_icon_flip']           = array('#type' => 'value', '#value' => $defaults['awesome_icon_flip']);
+    $form['awesome']                     = array('#type' => 'value', '#value' => 0);
+  }
+
+  return $form;
+}
+
+/**
+ * Function
+ *
+ * @param
+ *
+ * @return
+ *   Returns
+ *
+ */
+function getlocations_leaflet_paths_get($reset = FALSE, $min = FALSE) {
+
+  if ($min) {
+    $defaults = array(
+      'getlocations_leaflet_path'            => GETLOCATIONS_LEAFLET_PATH . '/js/getlocations_leaflet.min.js',
+      'getlocations_leaflet_circles_path'    => GETLOCATIONS_LEAFLET_PATH . '/js/getlocations_leaflet_circles.min.js',
+      'getlocations_leaflet_formatter_path'  => GETLOCATIONS_LEAFLET_PATH . '/js/getlocations_leaflet_formatter.min.js',
+      'getlocations_leaflet_polygons_path'   => GETLOCATIONS_LEAFLET_PATH . '/js/getlocations_leaflet_polygons.min.js',
+      'getlocations_leaflet_polylines_path'  => GETLOCATIONS_LEAFLET_PATH . '/js/getlocations_leaflet_polylines.min.js',
+      'getlocations_leaflet_rectangles_path' => GETLOCATIONS_LEAFLET_PATH . '/js/getlocations_leaflet_rectangles.min.js',
+      'getlocations_leaflet_geojson_path'    => GETLOCATIONS_LEAFLET_PATH . '/js/getlocations_leaflet_geojson.min.js',
+      'getlocations_leaflet_providers_path'  => GETLOCATIONS_LEAFLET_PATH . '/js/getlocations_leaflet_providers.min.js',
+    );
+  }
+  else {
+    $defaults = array(
+      'getlocations_leaflet_path'            => GETLOCATIONS_LEAFLET_PATH . '/js/getlocations_leaflet.js',
+      'getlocations_leaflet_circles_path'    => GETLOCATIONS_LEAFLET_PATH . '/js/getlocations_leaflet_circles.js',
+      'getlocations_leaflet_formatter_path'  => GETLOCATIONS_LEAFLET_PATH . '/js/getlocations_leaflet_formatter.js',
+      'getlocations_leaflet_polygons_path'   => GETLOCATIONS_LEAFLET_PATH . '/js/getlocations_leaflet_polygons.js',
+      'getlocations_leaflet_polylines_path'  => GETLOCATIONS_LEAFLET_PATH . '/js/getlocations_leaflet_polylines.js',
+      'getlocations_leaflet_rectangles_path' => GETLOCATIONS_LEAFLET_PATH . '/js/getlocations_leaflet_rectangles.js',
+      'getlocations_leaflet_geojson_path'    => GETLOCATIONS_LEAFLET_PATH . '/js/getlocations_leaflet_geojson.js',
+      'getlocations_leaflet_providers_path'  => GETLOCATIONS_LEAFLET_PATH . '/js/getlocations_leaflet_providers.js',
+    );
+  }
+
+  if ($reset || $min) {
+    $getlocations_leaflet_paths = $defaults;
+  }
+  else {
+    $settings = variable_get('getlocations_leaflet_paths', $defaults);
+    $getlocations_leaflet_paths = getlocations_adjust_vars($defaults, $settings);
+  }
+  return $getlocations_leaflet_paths;
+}
+
+/**
+ * Function
+ *
+ * @param
+ *
+ * @return
+ *   Returns
+ *
+ */
+function getlocations_leaflet_settings_form() {
+
+  $form = array();
+  $pagetitle = '<div><h4>' . t('Getlocations Leaflet') . '</h4><p>' . t('The settings selected here will be used as the starting point for all other Leaflet maps.') . '</p></div>';
+  $form['pagetitle'] = array('#markup' => $pagetitle);
+
+  $form['rebuild'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('Regenerate Getlocations leaflet marker cache'),
+    '#description' => t('If you are having problems with markers, or have changed anything in the markers library, click on the Regenerate button.'),
+    '#collapsible' => TRUE,
+    '#collapsed' => FALSE,
+  );
+  $form['rebuild']['rebuild_marker_js'] = array(
+    '#type' => 'submit',
+    '#value' => t('Regenerate'),
+    '#submit' => array('_getlocations_leaflet_rebuild_marker_js_submit'),
+  );
+  $form['rebuild']['getlocations_leaflet_flush'] = getlocations_element_map_checkbox(
+    t('Flush marker cache'),
+    variable_get('getlocations_leaflet_flush', 1),
+    t('Include the marker cache when the Drupal cache is flushed.')
+  );
+
+  // plugins
+  $getlocations_leaflet_plugins = getlocations_leaflet_plugins();
+  $form['getlocations_leaflet_plugins'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('Leaflet plugins'),
+    '#tree' => TRUE,
+    '#collapsible' => TRUE,
+    '#collapsed' => FALSE,
+  );
+  $form['getlocations_leaflet_plugins']['markercluster_enable'] = getlocations_element_map_checkbox(
+    t('Enable Markercluster plugin'),
+    $getlocations_leaflet_plugins['markercluster_enable']
+  );
+  $form['getlocations_leaflet_plugins']['fullscreen_enable'] = getlocations_element_map_checkbox(
+    t('Enable Fullscreen plugin'),
+    $getlocations_leaflet_plugins['fullscreen_enable']
+  );
+  $form['getlocations_leaflet_plugins']['graticule_enable'] = getlocations_element_map_checkbox(
+    t('Enable Graticule plugin'),
+    $getlocations_leaflet_plugins['graticule_enable']
+  );
+  $form['getlocations_leaflet_plugins']['pancontrol_enable'] = getlocations_element_map_checkbox(
+    t('Enable Pancontrol plugin'),
+    $getlocations_leaflet_plugins['pancontrol_enable']
+  );
+  $form['getlocations_leaflet_plugins']['zoomslider_enable'] = getlocations_element_map_checkbox(
+    t('Enable Zoomslider plugin'),
+    $getlocations_leaflet_plugins['zoomslider_enable']
+  );
+  $form['getlocations_leaflet_plugins']['awesome_enable'] = getlocations_element_map_checkbox(
+    t('Enable Awesome markers plugin'),
+    $getlocations_leaflet_plugins['awesome_enable']
+  );
+  $form['getlocations_leaflet_plugins']['mouseposition_enable'] = getlocations_element_map_checkbox(
+    t('Enable Mouseposition plugin'),
+    $getlocations_leaflet_plugins['mouseposition_enable']
+  );
+  $form['getlocations_leaflet_plugins']['minimap_enable'] = getlocations_element_map_checkbox(
+    t('Enable Minimap plugin'),
+    $getlocations_leaflet_plugins['minimap_enable']
+  );
+
+  // cloudmade
+  $getlocations_leaflet_cloudmade = variable_get('getlocations_leaflet_cloudmade', array('cloudmade_key' => '', 'cloudmade_maps' => array()));
+  $form['getlocations_leaflet_cloudmade'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('Cloudmade maps'),
+    // This will store all the defaults in one variable.
+    '#tree' => TRUE,
+    '#collapsible' => TRUE,
+    '#collapsed' => FALSE,
+  );
+  $form['getlocations_leaflet_cloudmade']['cloudmade_key'] = getlocations_element_map_tf(
+    t('CloudMade Developers Key'),
+    $getlocations_leaflet_cloudmade['cloudmade_key'],
+    t('In order to use the <a target="_blank" href="@services">CloudMade services</a>, you must <a target="_blank" href="@key">register and get a key</a> first.', array('@services' => 'http://developers.cloudmade.com/projects', '@key' => 'http://account.cloudmade.com/register')),
+    40
+  );
+  $mapnum = count($getlocations_leaflet_cloudmade['cloudmade_maps']);
+  if ($mapnum == 0) {
+    $mapnum = 2;
+  }
+  else {
+    $mapnum++;
+  }
+  // limit mapnum
+  if ($mapnum > 5) {
+    $mapnum = 5;
+  }
+  $res = getlocations_leaflet_get_cloudmade_resolutions();
+  for ($ct = 0; $ct < $mapnum; $ct++) {
+
+    $form['getlocations_leaflet_cloudmade']['cloudmade_maps'][$ct]['style_name'] = getlocations_element_dd(
+      t('Style Name @num', array('@num' => $ct+1)),
+      (isset($getlocations_leaflet_cloudmade['cloudmade_maps'][$ct]['style_name']) ? $getlocations_leaflet_cloudmade['cloudmade_maps'][$ct]['style_name'] : ''),
+      $res,
+      t('"Standard Resolution" is for general use, "High Resolution" is best for tablets, "High Resolution Small tile" is best for smartphones.')
+    );
+
+    $form['getlocations_leaflet_cloudmade']['cloudmade_maps'][$ct]['style_id'] = getlocations_element_map_tf(
+      t('Style ID @num', array('@num' => $ct+1)),
+      (isset($getlocations_leaflet_cloudmade['cloudmade_maps'][$ct]['style_id']) ? $getlocations_leaflet_cloudmade['cloudmade_maps'][$ct]['style_id'] : ''),
+      t('The style ID for the map you want to include, see <a href="@editor">Cloudmade style editor</a>, note the number in the bottom righthand corner of the examples.', array('@editor' => 'http://maps.cloudmade.com/editor')),
+      10
+    );
+    $form['getlocations_leaflet_cloudmade']['cloudmade_maps'][$ct]['style_token'] = getlocations_element_map_tf(
+      t('Style Token @num', array('@num' => $ct+1)),
+      (isset($getlocations_leaflet_cloudmade['cloudmade_maps'][$ct]['style_token']) ? $getlocations_leaflet_cloudmade['cloudmade_maps'][$ct]['style_token'] : ''),
+      t('Some styles require a token.'),
+      40
+    );
+
+  }
+
+  $settings = getlocations_leaflet_defaults();
+
+  $form['getlocations_leaflet_defaults'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('Default Page settings'),
+    // This will store all the defaults in one variable.
+    '#tree' => TRUE,
+    '#collapsible' => TRUE,
+    '#collapsed' => FALSE,
+  );
+  $labels = array(
+    'width' => t('Width'),
+    'height' => t('Height'),
+  );
+
+  $form['getlocations_leaflet_defaults'] += getlocations_map_display_basics_form($settings, $labels);
+  unset($form['getlocations_leaflet_defaults']['map_resize']);
+  unset($form['getlocations_leaflet_defaults']['fullscreen_disable']);
+  unset($form['getlocations_leaflet_defaults']['styles']);
+
+  unset($form['getlocations_leaflet_defaults']['zoom']['#options']['21']);
+  unset($form['getlocations_leaflet_defaults']['zoom']['#options']['20']);
+  unset($form['getlocations_leaflet_defaults']['zoom']['#options']['19']);
+  unset($form['getlocations_leaflet_defaults']['minzoom_map']['#options']['21']);
+  unset($form['getlocations_leaflet_defaults']['minzoom_map']['#options']['20']);
+  unset($form['getlocations_leaflet_defaults']['minzoom_map']['#options']['19']);
+
+  unset($form['getlocations_leaflet_defaults']['maxzoom_map']['#options']['21']);
+  unset($form['getlocations_leaflet_defaults']['maxzoom_map']['#options']['20']);
+  unset($form['getlocations_leaflet_defaults']['maxzoom_map']['#options']['19']);
+
+  $form['getlocations_leaflet_defaults'] += getlocations_leaflet_display_options_form($settings, TRUE);
+  unset($form['getlocations_leaflet_defaults']['nodezoom']['#options']['21']);
+  unset($form['getlocations_leaflet_defaults']['nodezoom']['#options']['20']);
+  unset($form['getlocations_leaflet_defaults']['nodezoom']['#options']['19']);
+
+  // awesome
+  if ($settings['awesome'] && $settings['marker_type'] == 'fa') {
+
+    // default
+    $form['getlocations_leaflet_defaults'] += getlocations_leaflet_awesome_markers_elements_get($settings);
+
+    // nodes
+    $labels = array(
+      'awesome_icon' => t('Node Awesome icon'),
+      'awesome_icon_color' => t('Node Awesome icon color'),
+      'awesome_marker_color' => t('Node Awesome marker color'),
+      'awesome_title' => t('Node Awesome Fonts icon settings'),
+      'awesome_icon_spin' => t('Node Awesome icon spin'),
+      'awesome_icon_size' => t('Node Awesome icon size'),
+      'awesome_icon_type' => t('Node Awesome icon type'),
+      'awesome_icon_flip' => t('Node Awesome icon flip and rotate'),
+    );
+    $form['getlocations_leaflet_defaults'] += getlocations_leaflet_awesome_markers_elements_get($settings, $labels, "node");
+
+    // node type markers
+    if ($types = getlocations_get_types()) {
+      $getlocations_node_marker = variable_get('getlocations_node_marker', array('enable' => 0));
+      if ($getlocations_node_marker['enable']) {
+        $typect = 0;
+        foreach ($types AS $type => $name) {
+          $field_names = getlocations_get_fieldname2($type, 'node');
+          foreach ($field_names AS $field_name) {
+            $label = t('%name Map marker, field %field' , array('%name' => $name, '%field' => $field_name));
+            $mkey = 'node_marker__' . strtolower($type) . '__' . $field_name;
+            $labels = array(
+              'awesome_icon'         => t($label . ' Awesome icon'),
+              'awesome_icon_color'   => t($label . ' Awesome icon color'),
+              'awesome_marker_color' => t($label . ' Awesome marker color'),
+              'awesome_title'        => t($label . ' Awesome Fonts icon settings'),
+              'awesome_icon_spin'    => t($label . ' Awesome icon spin'),
+              'awesome_icon_size'    => t($label . ' Awesome icon size'),
+              'awesome_icon_type'    => t($label . ' Awesome icon type'),
+              'awesome_icon_flip'    => t($label . ' Awesome icon flip and rotate'),
+            );
+            $form['getlocations_leaflet_defaults'] += getlocations_leaflet_awesome_markers_elements_get($settings, $labels, $mkey);
+          }
+        }
+      }
+    }
+
+    // users
+    if (getlocations_check_entity_type('user') || getlocations_check_entity_type('profile2')) {
+      $labels = array(
+        'awesome_icon' => t('User Awesome icon'),
+        'awesome_icon_color' => t('User Awesome icon color'),
+        'awesome_marker_color' => t('User Awesome marker color'),
+        'awesome_title' => t('User Awesome Fonts icon settings'),
+        'awesome_icon_spin' => t('User Awesome icon spin'),
+        'awesome_icon_size' => t('User Awesome icon size'),
+        'awesome_icon_type' => t('User Awesome icon type'),
+        'awesome_icon_flip' => t('User Awesome icon flip and rotate'),
+      );
+      $form['getlocations_leaflet_defaults'] += getlocations_leaflet_awesome_markers_elements_get($settings, $labels, 'user');
+    }
+
+    if (module_exists('taxonomy')) {
+      if ($types = getlocations_get_machine_vocabularies()) {
+        // vocabulary
+        // TODO per vocab
+        $labels = array(
+          'awesome_icon' => t('Vocabulary Awesome icon'),
+          'awesome_icon_color' => t('Vocabulary Awesome icon color'),
+          'awesome_marker_color' => t('Vocabulary Awesome marker color'),
+          'awesome_title' => t('Vocabulary Awesome Fonts icon settings'),
+          'awesome_icon_spin' => t('Vocabulary Awesome icon spin'),
+          'awesome_icon_size' => t('Vocabulary Awesome icon size'),
+          'awesome_icon_type' => t('Vocabulary Awesome icon type'),
+          'awesome_icon_flip' => t('Vocabulary Awesome icon flip and rotate'),
+        );
+        $form['getlocations_leaflet_defaults'] += getlocations_leaflet_awesome_markers_elements_get($settings, $labels, 'vocabulary');
+
+      }
+      // terms
+      // TODO per term
+      $labels = array(
+        'awesome_icon' => t('Term Awesome icon'),
+        'awesome_icon_color' => t('Term Awesome icon color'),
+        'awesome_marker_color' => t('Term Awesome marker color'),
+        'awesome_title' => t('Term Awesome Fonts icon settings'),
+        'awesome_icon_spin' => t('Term Awesome icon spin'),
+        'awesome_icon_size' => t('Term Awesome icon size'),
+        'awesome_icon_type' => t('Term Awesome icon type'),
+        'awesome_icon_flip' => t('Term Awesome icon flip and rotate'),
+      );
+      $form['getlocations_leaflet_defaults'] += getlocations_leaflet_awesome_markers_elements_get($settings, $labels, 'term');
+    }
+    if (getlocations_check_entity_type('comment')) {
+      // comment
+      $labels = array(
+        'awesome_icon' => t('Comment Awesome icon'),
+        'awesome_icon_color' => t('Comment Awesome icon color'),
+        'awesome_marker_color' => t('Comment Awesome marker color'),
+        'awesome_title' => t('Comment Awesome Fonts icon settings'),
+        'awesome_icon_spin' => t('Comment Awesome icon spin'),
+        'awesome_icon_size' => t('Comment Awesome icon size'),
+        'awesome_icon_type' => t('Comment Awesome icon type'),
+        'awesome_icon_flip' => t('Comment Awesome icon flip and rotate'),
+      );
+      $form['getlocations_leaflet_defaults'] += getlocations_leaflet_awesome_markers_elements_get($settings, $labels, 'comment');
+
+    }
+
+  }
+
+  $form['getlocations_leaflet_defaults']['returnlink_page_enable'] = getlocations_element_map_checkbox(
+    t('Show link back to page'),
+    $settings['returnlink_page_enable']
+  );
+  $form['getlocations_leaflet_defaults']['returnlink_page_link'] = getlocations_element_map_tf(
+    t('Text of page return link'),
+    $settings['returnlink_page_link'],
+    t('Use %t to insert the page title'),
+    30,
+    64
+  );
+
+  if (module_exists('getlocations_fields')) {
+    if (getlocations_check_entity_type('user') || getlocations_check_entity_type('profile2')) {
+      $form['getlocations_leaflet_defaults']['returnlink_user_enable'] = getlocations_element_map_checkbox(
+        t('Show link back to user'),
+        $settings['returnlink_user_enable']
+      );
+      $form['getlocations_leaflet_defaults']['returnlink_user_link'] = getlocations_element_map_tf(
+        t('Text of user return link'),
+        $settings['returnlink_user_link'],
+        t('Use %n to insert the user name'),
+        30,
+        64
+      );
+    }
+
+    if (module_exists('taxonomy')) {
+      if (getlocations_get_vocabularies()) {
+        $form['getlocations_leaflet_defaults']['returnlink_term_enable'] = getlocations_element_map_checkbox(
+          t('Show link back to term'),
+          $settings['returnlink_term_enable']
+        );
+        $form['getlocations_leaflet_defaults']['returnlink_term_link'] = getlocations_element_map_tf(
+          t('Text of term return link'),
+          $settings['returnlink_term_link'],
+          t('Use %n to insert the term name'),
+          30,
+          64
+        );
+      }
+    }
+
+    if (getlocations_check_entity_type('comment')) {
+      $form['getlocations_leaflet_defaults']['returnlink_comment_enable'] = getlocations_element_map_checkbox(
+        t('Show link back to comment'),
+        $settings['returnlink_comment_enable']
+      );
+      $form['getlocations_leaflet_defaults']['returnlink_comment_link'] = getlocations_element_map_tf(
+        t('Text of comment return link'),
+        $settings['returnlink_comment_link'],
+        t('Use %n to insert the comment subject'),
+        30,
+        64
+      );
+    }
+  }
+
+  // javascript paths
+  $getlocations_leaflet_paths = getlocations_leaflet_paths_get();
+  $form['getlocations_leaflet_paths'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('Javascript paths'),
+    '#description' => t('For advanced users who want to supply their own javascript.'),
+    '#collapsible' => TRUE,
+    '#collapsed' => TRUE,
+    // This will store all the defaults in one variable.
+    '#tree' => TRUE,
+  );
+
+  $form['getlocations_leaflet_paths']['getlocations_leaflet_path'] = getlocations_element_path(
+    t('Path to Getlocations leaflet javascript file'),
+    $getlocations_leaflet_paths['getlocations_leaflet_path'],
+    80,
+    128,
+    t('Where the Getlocations leaflet javascript file is located.')
+  );
+  $form['getlocations_leaflet_paths']['getlocations_leaflet_circles_path'] = getlocations_element_path(
+    t('Path to Getlocations leaflet circles javascript file'),
+    $getlocations_leaflet_paths['getlocations_leaflet_circles_path'],
+    80,
+    128,
+    t('Where the Getlocations leaflet circles javascript file is located.')
+  );
+  $form['getlocations_leaflet_paths']['getlocations_leaflet_formatter_path'] = getlocations_element_path(
+    t('Path to Getlocations leaflet formatter javascript file'),
+    $getlocations_leaflet_paths['getlocations_leaflet_formatter_path'],
+    80,
+    128,
+    t('Where the Getlocations leaflet formatter javascript file is located.')
+  );
+  $form['getlocations_leaflet_paths']['getlocations_leaflet_polygons_path'] = getlocations_element_path(
+    t('Path to Getlocations leaflet polygons javascript file'),
+    $getlocations_leaflet_paths['getlocations_leaflet_polygons_path'],
+    80,
+    128,
+    t('Where the Getlocations leaflet polygons javascript file is located.')
+  );
+  $form['getlocations_leaflet_paths']['getlocations_leaflet_polylines_path'] = getlocations_element_path(
+    t('Path to Getlocations leaflet polylines javascript file'),
+    $getlocations_leaflet_paths['getlocations_leaflet_polylines_path'],
+    80,
+    128,
+    t('Where the Getlocations leaflet polylines javascript file is located.')
+  );
+  $form['getlocations_leaflet_paths']['getlocations_leaflet_rectangles_path'] = getlocations_element_path(
+    t('Path to Getlocations leaflet rectangles javascript file'),
+    $getlocations_leaflet_paths['getlocations_leaflet_rectangles_path'],
+    80,
+    128,
+    t('Where the Getlocations leaflet rectangles javascript file is located.')
+  );
+  $form['getlocations_leaflet_paths']['getlocations_leaflet_geojson_path'] = getlocations_element_path(
+    t('Path to Getlocations leaflet geojson javascript file'),
+    $getlocations_leaflet_paths['getlocations_leaflet_geojson_path'],
+    80,
+    128,
+    t('Where the Getlocations leaflet geojson javascript file is located.')
+  );
+  $form['getlocations_leaflet_paths']['getlocations_leaflet_providers_path'] = getlocations_element_path(
+    t('Path to Getlocations leaflet providers javascript file'),
+    $getlocations_leaflet_paths['getlocations_leaflet_providers_path'],
+    80,
+    128,
+    t('Where the Getlocations leaflet providers javascript file is located.')
+  );
+
+  $form['getlocations_leaflet_paths']['reset'] = getlocations_element_dd(
+    t('Reset'),
+    0,
+    array(0 => t('No'), 1 => t('Reset'), 2 => t('Reset to minified')),
+    t('Reset the paths to the defaults.')
+  );
+
+  unset($form['#theme']);
+  $form['#theme'] = 'getlocations_leaflet_settings_form';
+  $form['#validate'][] = 'getlocations_leaflet_settings_validate';
+  $form['#attached']['js'] = array($getlocations_leaflet_paths['getlocations_leaflet_formatter_path']);
+
+  return system_settings_form($form);
+
+}
+
+/**
+ * Function
+ *
+ * @param
+ *
+ * @return
+ *   Returns
+ *
+ */
+function getlocations_leaflet_settings_validate($form, &$form_state) {
+  $reset = $form_state['values']['getlocations_leaflet_paths']['reset'];
+  unset($form_state['values']['getlocations_leaflet_paths']['reset']);
+  if ($reset == 1) {
+    $form_state['values']['getlocations_leaflet_paths'] = getlocations_leaflet_paths_get(TRUE);
+  }
+  elseif ($reset == 2) {
+    $form_state['values']['getlocations_leaflet_paths'] = getlocations_leaflet_paths_get(FALSE, TRUE);
+  }
+
+
+  // we need to ensure that any empty cloudmade_maps are not saved
+  $mapnum = count($form_state['values']['getlocations_leaflet_cloudmade']['cloudmade_maps']);
+  $emptyfound = FALSE;
+  for ($ct = 0; $ct < $mapnum; $ct++) {
+    if (empty($form_state['values']['getlocations_leaflet_cloudmade']['cloudmade_maps'][$ct]['style_id'])) {
+      unset($form_state['values']['getlocations_leaflet_cloudmade']['cloudmade_maps'][$ct]);
+      $emptyfound = TRUE;
+    }
+  }
+  // reorder them in case some clown empties one before the last one
+  if ($emptyfound) {
+    $mapnum = count($form_state['values']['getlocations_leaflet_cloudmade']['cloudmade_maps']);
+    $temp = array();
+    $ct = 0;
+    foreach ($form_state['values']['getlocations_leaflet_cloudmade']['cloudmade_maps'] AS $k => $v) {
+      $temp[$ct] = $v;
+      $ct++;
+    }
+    if (count($temp)) {
+      $form_state['values']['getlocations_leaflet_cloudmade']['cloudmade_maps'] = $temp;
+    }
+  }
+
+  // css check
+  if (isset($form_state['values']['getlocations_leaflet_defaults']['width'])) {
+    if ($check = getlocations_dim_check($form_state['values']['getlocations_leaflet_defaults']['width'])) {
+      $form_state['values']['getlocations_leaflet_defaults']['width'] = $check;
+    }
+    else {
+      form_set_error('getlocations_leaflet_defaults][width', t('Width must be valid css'));
+    }
+  }
+  if (isset($form_state['values']['getlocations_leaflet_defaults']['height'])) {
+    if ($check = getlocations_dim_check($form_state['values']['getlocations_leaflet_defaults']['height'])) {
+      $form_state['values']['getlocations_leaflet_defaults']['height'] = $check;
+    }
+    else {
+      form_set_error('getlocations_leaflet_defaults][height', t('Height must be valid css'));
+    }
+  }
+
+}
+
+/**
+ * Rebuild marker js.
+ */
+function _getlocations_leaflet_rebuild_marker_js_submit($form, &$form_state) {
+  if (getlocations_leaflet_regenerate_markers()) {
+    drupal_set_message(t('Marker cache regenerated.'));
+  }
+}
+
+/**
+ * Function
+ *
+ * @param
+ *
+ * @return
+ *   Returns
+ *
+ */
+function getlocations_leaflet_entity_type_map($type, $entity_id) {
+  global $language;
+
+  $entity_type = getlocations_get_entity_type_from_path($type);
+  $entity_get_info = entity_get_info($entity_type);
+
+  // get key for entity_type
+  $entity_key = $entity_get_info['entity keys']['id']; // nid, cid, uid etc
+  $locations = getlocations_load_locations($entity_id, $entity_key);
+  $getlocations_leaflet_defaults = getlocations_leaflet_defaults();
+
+  $load_hook = $entity_get_info['load hook'];
+  $object = $load_hook($entity_id);
+  $lang = ($object->language ? $object->language : $language->language);
+  $locative_field_name = $object->field_leaflet_map[$lang][0]['locative_field_name'];
+  $typemarkers = getlocations_get_markertypes($entity_type);
+  $bundle = $object->type;
+  $marker = '';
+  $vector = '';
+  // awesome
+  if ($getlocations_leaflet_defaults['awesome'] && $getlocations_leaflet_defaults['marker_type'] == 'fa') {
+    if ($entity_type == 'node') {
+      $per_field_markers = FALSE;
+      $getlocations_node_marker = variable_get('getlocations_node_marker', array('enable' => 0));
+      if ($getlocations_node_marker['enable']) {
+        if ($types = getlocations_get_types()) {
+          foreach ($types AS $type => $name) {
+            if ($type == $bundle) {
+              $field_names = getlocations_get_fieldname2($type, 'node');
+              foreach ($field_names AS $field_name) {
+                if ($field_name == $locative_field_name) {
+                  $mkey = 'node_marker__' . strtolower($type) . '__' . $field_name;
+                  $vicon = getlocations_leaflet_awesome_marker_get($getlocations_leaflet_defaults, $mkey);
+                  $per_field_markers = TRUE;
+                }
+              }
+            }
+          }
+        }
+      }
+      if (! $per_field_markers) {
+        $vicon = getlocations_leaflet_awesome_marker_get($getlocations_leaflet_defaults, 'node');
+      }
+    }
+    elseif ($entity_type == 'taxonomy_term') {
+      $vicon = getlocations_leaflet_awesome_marker_get($getlocations_leaflet_defaults, 'vocabulary');
+    }
+    elseif ($entity_type == 'user') {
+      $vicon = getlocations_leaflet_awesome_marker_get($getlocations_leaflet_defaults, 'user');
+    }
+    elseif ($entity_type == 'comment') {
+      $vicon = getlocations_leaflet_awesome_marker_get($getlocations_leaflet_defaults, 'comment');
+    }
+    else {
+      $vicon = getlocations_leaflet_awesome_marker_get($getlocations_leaflet_defaults);
+    }
+    $vector = $vicon;
+  }
+  else {
+    // marker
+    $marker = $getlocations_leaflet_defaults['node_map_marker'];
+    if (isset($getlocations_leaflet_defaults[$entity_type . '_map_marker'])) {
+      $marker = $getlocations_leaflet_defaults[$entity_type . '_map_marker'];
+    }
+    if (isset($typemarkers[$object->type]) && $typemarkers[$object->type]) {
+      $marker = $typemarkers[$object->type];
+    }
+  }
+
+  $entity_title = '';
+  if (isset($object->title)) {
+    $entity_title = $object->title;
+  }
+  elseif (isset($object->name)) {
+    $entity_title = $object->name;
+  }
+  elseif (isset($object->subject)) {
+    $entity_title = $object->subject;
+  }
+
+  $returnlink = FALSE;
+  $links = array();
+  // return link
+  if ($entity_type == 'node' && $getlocations_leaflet_defaults['returnlink_page_enable']) {
+    if (is_object($object)) {
+      $linktext = $getlocations_leaflet_defaults['returnlink_page_link'];
+      if ( preg_match("/%t/", $linktext)) {
+        $linktext = preg_replace("/%t/", $object->title, $linktext);
+      }
+      $returnlink = l($linktext, 'node/' . $object->nid);
+    }
+  }
+  elseif ($entity_type == 'user' && $getlocations_leaflet_defaults['returnlink_user_enable']) {
+    if (is_object($object)) {
+      $linktext = $getlocations_leaflet_defaults['returnlink_user_link'];
+      if ( preg_match("/%n/", $linktext)) {
+        $linktext = preg_replace("/%n/", $object->name, $linktext);
+      }
+      $returnlink = l($linktext, 'user/' . $object->uid);
+    }
+  }
+  elseif (($entity_type == 'term' || $entity_type == 'taxonomy_term') && $getlocations_leaflet_defaults['returnlink_term_enable'] && module_exists('taxonomy')) {
+    if (is_object($object)) {
+      $linktext = $getlocations_leaflet_defaults['returnlink_term_link'];
+      if ( preg_match("/%n/", $linktext)) {
+        $linktext = preg_replace("/%n/", $object->name, $linktext);
+      }
+      $returnlink = l($linktext, 'taxonomy/term/' . $object->tid);
+    }
+  }
+  elseif ($entity_type == 'comment' && $getlocations_leaflet_defaults['returnlink_comment_enable'] && module_exists('comment')) {
+    if (is_object($object)) {
+      $linktext = $getlocations_leaflet_defaults['returnlink_comment_link'];
+      if ( preg_match("/%n/", $linktext)) {
+        $linktext = preg_replace("/%n/", $object->subject, $linktext);
+      }
+      $returnlink = l($linktext, 'comment/' . $object->cid);
+    }
+  }
+  if ($returnlink) {
+    $links['returnlink'] = $returnlink;
+  }
+
+  $latlons = array();
+  $minmaxes = array('minlat' => 0, 'minlon' => 0, 'maxlat' => 0, 'maxlon' => 0);
+  $ct = 0;
+
+  if (count($locations)) {
+    // we should loop over them and dump bummers with no lat/lon
+    foreach ($locations AS $key => $location) {
+      if ($latlon = getlocations_latlon_check($location['latitude'] . ',' . $location['longitude'])) {
+        $ll = explode(',', $latlon);
+        $location['latitude'] = $ll[0];
+        $location['longitude'] = $ll[1];
+        $minmaxes = getlocations_do_minmaxes($ct, $location, $minmaxes);
+
+        $lid = (isset($location['glid']) ? $location['glid'] : (isset($location['lid']) ? $location['lid'] : 0));
+
+        if (! isset($location['key'])) {
+          $location['key'] = '';
+        }
+        else {
+          $location['lid'] = $entity_id;
+        }
+        // node only
+        if ($entity_type == 'node') {
+          // term markers
+          $marker = getlocations_get_term_marker($entity_id, $marker);
+
+          // TODO awesome here too?
+
+        }
+
+        // per location marker
+        if (isset($location['marker']) && ! empty($location['marker'])) {
+          $marker = $location['marker'];
+        }
+
+        if ($lid && $getlocations_leaflet_defaults['markeraction'] == 'popup') {
+          $markeraction = array('type' => 'popup', 'data' => getlocations_getinfo($lid, $entity_key));
+        }
+        elseif ($lid && $getlocations_leaflet_defaults['markeraction'] == 'link') {
+          $markeraction = array('type' => 'link', 'data' => getlocations_getlidinfo($lid, $entity_key));
+        }
+        else {
+          $markeraction = array();
+        }
+
+        $name = htmlspecialchars_decode($location['name'] ? strip_tags($location['name']) : strip_tags($entity_title), ENT_QUOTES);
+        $latlons[$ct] = array($location['latitude'], $location['longitude'], $entity_key, $entity_id, $lid, $entity_title, $marker, $vector, $markeraction, '');
+        $iconlist[$marker] = getlocations_leaflet_get_marker($marker);
+
+        $ct++;
+      }
+
+    } // end foreach
+
+    if ($ct < 2 ) {
+      unset($minmaxes);
+      $minmaxes = '';
+    }
+
+    $map_settings = getlocations_leaflet_map_get_info('Getlocations OSM');
+    $map_settings = getlocations_leaflet_get_map_layers($map_settings);
+
+    if (! empty($getlocations_leaflet_defaults['baselayers'])) {
+      $map_layers = array();
+      foreach ($getlocations_leaflet_defaults['baselayers'] AS $k => $v) {
+        if (isset($map_settings['map_layers'][$k]) && $getlocations_leaflet_defaults['baselayers'][$k]) {
+          $map_layers[$k] = $map_settings['map_layers'][$k];
+        }
+      }
+      if (! empty($map_layers)) {
+        $map_settings['map_layers'] = $map_layers;
+      }
+    }
+
+    $nodezoom = FALSE;
+    if ($ct == 1 && $getlocations_leaflet_defaults['nodezoom']) {
+      $nodezoom = $getlocations_leaflet_defaults['nodezoom'];
+      $map_settings['map_opts']['center'] = array($location['latitude'], $location['longitude']);
+      $map_settings['map_opts']['zoom'] = $nodezoom;
+    }
+    elseif ($ct < 1) {
+      $ll = explode(',', $getlocations_leaflet_defaults['latlong']);
+      $map_settings['map_opts']['center'] = array($ll[0], $ll[1]);
+    }
+
+    $mapid = getlocations_setup_map('', FALSE, FALSE, TRUE);
+
+    // add in some more
+    $map_settings = getlocations_leaflet_map_settings_do($map_settings, $getlocations_leaflet_defaults, $latlons, $mapid);
+    $map_settings['map_settings']['nodezoom'] = ($nodezoom ? $nodezoom : FALSE);
+    $map_settings['map_settings']['minmaxes'] = (empty($minmaxes) ? FALSE : implode(',', $minmaxes));
+
+    $map_settings['icons'] = $iconlist;
+    $map_settings['datanum'] = $ct;
+    $map_settings['latlons'] = $latlons;
+
+    drupal_add_library('getlocations_leaflet', 'getlocations-leaflet');
+
+    $output = theme('getlocations_leaflet_map', array(
+        'width' => $getlocations_leaflet_defaults['width'],
+        'height' => $getlocations_leaflet_defaults['height'],
+        'map_settings' => $map_settings,
+        'mapid' => $mapid,
+        'links' => $links
+      )
+    );
+    return $output;
+
+  }
+
+}
+
+/**
+ * Function
+ *
+ * @param
+ *
+ * @return
+ *   Returns
+ *
+ */
+function getlocations_leaflet_awesome_markers_list() {
+  $list = array(
+    'fa-adjust' => t('Adjust'),
+    'fa-adn' => t('Adn'),
+    'fa-align-center' => t('Align center'),
+    'fa-align-justify' => t('Align justify'),
+    'fa-align-left' => t('Align left'),
+    'fa-align-right' => t('Align right'),
+    'fa-ambulance' => t('Ambulance'),
+    'fa-anchor' => t('Anchor'),
+    'fa-android' => t('Android'),
+    'fa-angle-double-down' => t('Angle double down'),
+    'fa-angle-double-left' => t('Angle double left'),
+    'fa-angle-double-right' => t('Angle double right'),
+    'fa-angle-double-up' => t('Angle double up'),
+    'fa-angle-down' => t('Angle down'),
+    'fa-angle-left' => t('Angle left'),
+    'fa-angle-right' => t('Angle right'),
+    'fa-angle-up' => t('Angle up'),
+    'fa-apple' => t('Apple'),
+    'fa-archive' => t('Archive'),
+    'fa-arrow-circle-down' => t('Arrow circle down'),
+    'fa-arrow-circle-left' => t('Arrow circle left'),
+    'fa-arrow-circle-o-down' => t('Arrow circle o down'),
+    'fa-arrow-circle-o-left' => t('Arrow circle o left'),
+    'fa-arrow-circle-o-right' => t('Arrow circle o right'),
+    'fa-arrow-circle-o-up' => t('Arrow circle o up'),
+    'fa-arrow-circle-right' => t('Arrow circle right'),
+    'fa-arrow-circle-up' => t('Arrow circle up'),
+    'fa-arrow-down' => t('Arrow down'),
+    'fa-arrow-left' => t('Arrow left'),
+    'fa-arrow-right' => t('Arrow right'),
+    'fa-arrow-up' => t('Arrow up'),
+    'fa-arrows' => t('Arrows'),
+    'fa-arrows-alt' => t('Arrows alt'),
+    'fa-arrows-h' => t('Arrows h'),
+    'fa-arrows-v' => t('Arrows v'),
+    'fa-asterisk' => t('Asterisk'),
+    'fa-backward' => t('Backward'),
+    'fa-ban' => t('Ban'),
+    'fa-bar-chart-o' => t('Bar chart o'),
+    'fa-barcode' => t('Barcode'),
+    'fa-bars' => t('Bars'),
+    'fa-beer' => t('Beer'),
+    'fa-bell' => t('Bell'),
+    'fa-bell-o' => t('Bell o'),
+    'fa-bitbucket' => t('Bitbucket'),
+    'fa-bitbucket-square' => t('Bitbucket square'),
+    'fa-bold' => t('Bold'),
+    'fa-bolt' => t('Bolt'),
+    'fa-book' => t('Book'),
+    'fa-bookmark' => t('Bookmark'),
+    'fa-bookmark-o' => t('Bookmark o'),
+    'fa-briefcase' => t('Briefcase'),
+    'fa-btc' => t('Btc'),
+    'fa-bug' => t('Bug'),
+    'fa-building-o' => t('Building o'),
+    'fa-bullhorn' => t('Bullhorn'),
+    'fa-bullseye' => t('Bullseye'),
+    'fa-calendar' => t('Calendar'),
+    'fa-calendar-o' => t('Calendar o'),
+    'fa-camera' => t('Camera'),
+    'fa-camera-retro' => t('Camera retro'),
+    'fa-caret-down' => t('Caret down'),
+    'fa-caret-left' => t('Caret left'),
+    'fa-caret-right' => t('Caret right'),
+    'fa-caret-square-o-down' => t('Caret square o down'),
+    'fa-caret-square-o-left' => t('Caret square o left'),
+    'fa-caret-square-o-right' => t('Caret square o right'),
+    'fa-caret-square-o-up' => t('Caret square o up'),
+    'fa-caret-up' => t('Caret up'),
+    'fa-certificate' => t('Certificate'),
+    'fa-chain-broken' => t('Chain broken'),
+    'fa-check' => t('Check'),
+    'fa-check-circle' => t('Check circle'),
+    'fa-check-circle-o' => t('Check circle o'),
+    'fa-check-square' => t('Check square'),
+    'fa-check-square-o' => t('Check square o'),
+    'fa-chevron-circle-down' => t('Chevron circle down'),
+    'fa-chevron-circle-left' => t('Chevron circle left'),
+    'fa-chevron-circle-right' => t('Chevron circle right'),
+    'fa-chevron-circle-up' => t('Chevron circle up'),
+    'fa-chevron-down' => t('Chevron down'),
+    'fa-chevron-left' => t('Chevron left'),
+    'fa-chevron-right' => t('Chevron right'),
+    'fa-chevron-up' => t('Chevron up'),
+    'fa-circle' => t('Circle'),
+    'fa-circle-o' => t('Circle o'),
+    'fa-clipboard' => t('Clipboard'),
+    'fa-clock-o' => t('Clock o'),
+    'fa-cloud' => t('Cloud'),
+    'fa-cloud-download' => t('Cloud download'),
+    'fa-cloud-upload' => t('Cloud upload'),
+    'fa-code' => t('Code'),
+    'fa-code-fork' => t('Code fork'),
+    'fa-coffee' => t('Coffee'),
+    'fa-cog' => t('Cog'),
+    'fa-cogs' => t('Cogs'),
+    'fa-columns' => t('Columns'),
+    'fa-comment' => t('Comment'),
+    'fa-comment-o' => t('Comment o'),
+    'fa-comments' => t('Comments'),
+    'fa-comments-o' => t('Comments o'),
+    'fa-compass' => t('Compass'),
+    'fa-compress' => t('Compress'),
+    'fa-credit-card' => t('Credit card'),
+    'fa-crop' => t('Crop'),
+    'fa-crosshairs' => t('Crosshairs'),
+    'fa-css3' => t('Css3'),
+    'fa-cutlery' => t('Cutlery'),
+    'fa-desktop' => t('Desktop'),
+    'fa-dot-circle-o' => t('Dot circle o'),
+    'fa-download' => t('Download'),
+    'fa-dribbble' => t('Dribbble'),
+    'fa-dropbox' => t('Dropbox'),
+    'fa-eject' => t('Eject'),
+    'fa-ellipsis-h' => t('Ellipsis h'),
+    'fa-ellipsis-v' => t('Ellipsis v'),
+    'fa-envelope' => t('Envelope'),
+    'fa-envelope-o' => t('Envelope o'),
+    'fa-eraser' => t('Eraser'),
+    'fa-eur' => t('Eur'),
+    'fa-exchange' => t('Exchange'),
+    'fa-exclamation' => t('Exclamation'),
+    'fa-exclamation-circle' => t('Exclamation circle'),
+    'fa-exclamation-triangle' => t('Exclamation triangle'),
+    'fa-expand' => t('Expand'),
+    'fa-external-link' => t('External link'),
+    'fa-external-link-square' => t('External link square'),
+    'fa-eye' => t('Eye'),
+    'fa-eye-slash' => t('Eye slash'),
+    'fa-facebook' => t('Facebook'),
+    'fa-facebook-square' => t('Facebook square'),
+    'fa-fast-backward' => t('Fast backward'),
+    'fa-fast-forward' => t('Fast forward'),
+    'fa-female' => t('Female'),
+    'fa-fighter-jet' => t('Fighter jet'),
+    'fa-file' => t('File'),
+    'fa-file-o' => t('File o'),
+    'fa-file-text' => t('File text'),
+    'fa-file-text-o' => t('File text o'),
+    'fa-files-o' => t('Files o'),
+    'fa-film' => t('Film'),
+    'fa-filter' => t('Filter'),
+    'fa-fire' => t('Fire'),
+    'fa-fire-extinguisher' => t('Fire extinguisher'),
+    'fa-flag' => t('Flag'),
+    'fa-flag-checkered' => t('Flag checkered'),
+    'fa-flag-o' => t('Flag o'),
+    'fa-flask' => t('Flask'),
+    'fa-flickr' => t('Flickr'),
+    'fa-floppy-o' => t('Floppy o'),
+    'fa-folder' => t('Folder'),
+    'fa-folder-o' => t('Folder o'),
+    'fa-folder-open' => t('Folder open'),
+    'fa-folder-open-o' => t('Folder open o'),
+    'fa-font' => t('Font'),
+    'fa-forward' => t('Forward'),
+    'fa-foursquare' => t('Foursquare'),
+    'fa-frown-o' => t('Frown o'),
+    'fa-gamepad' => t('Gamepad'),
+    'fa-gavel' => t('Gavel'),
+    'fa-gbp' => t('Gbp'),
+    'fa-gift' => t('Gift'),
+    'fa-github' => t('Github'),
+    'fa-github-alt' => t('Github alt'),
+    'fa-github-square' => t('Github square'),
+    'fa-gittip' => t('Gittip'),
+    'fa-glass' => t('Glass'),
+    'fa-globe' => t('Globe'),
+    'fa-google-plus' => t('Google plus'),
+    'fa-google-plus-square' => t('Google plus square'),
+    'fa-h-square' => t('H square'),
+    'fa-hand-o-down' => t('Hand o down'),
+    'fa-hand-o-left' => t('Hand o left'),
+    'fa-hand-o-right' => t('Hand o right'),
+    'fa-hand-o-up' => t('Hand o up'),
+    'fa-hdd-o' => t('Hdd o'),
+    'fa-headphones' => t('Headphones'),
+    'fa-heart' => t('Heart'),
+    'fa-heart-o' => t('Heart o'),
+    'fa-home' => t('Home'),
+    'fa-hospital-o' => t('Hospital o'),
+    'fa-html5' => t('Html5'),
+    'fa-inbox' => t('Inbox'),
+    'fa-indent' => t('Indent'),
+    'fa-info' => t('Info'),
+    'fa-info-circle' => t('Info circle'),
+    'fa-inr' => t('Inr'),
+    'fa-instagram' => t('Instagram'),
+    'fa-italic' => t('Italic'),
+    'fa-jpy' => t('Jpy'),
+    'fa-key' => t('Key'),
+    'fa-keyboard-o' => t('Keyboard o'),
+    'fa-krw' => t('Krw'),
+    'fa-laptop' => t('Laptop'),
+    'fa-leaf' => t('Leaf'),
+    'fa-lemon-o' => t('Lemon o'),
+    'fa-level-down' => t('Level down'),
+    'fa-level-up' => t('Level up'),
+    'fa-lightbulb-o' => t('Lightbulb o'),
+    'fa-link' => t('Link'),
+    'fa-linkedin' => t('Linkedin'),
+    'fa-linkedin-square' => t('Linkedin square'),
+    'fa-linux' => t('Linux'),
+    'fa-list' => t('List'),
+    'fa-list-alt' => t('List alt'),
+    'fa-list-ol' => t('List ol'),
+    'fa-list-ul' => t('List ul'),
+    'fa-location-arrow' => t('Location arrow'),
+    'fa-lock' => t('Lock'),
+    'fa-long-arrow-down' => t('Long arrow down'),
+    'fa-long-arrow-left' => t('Long arrow left'),
+    'fa-long-arrow-right' => t('Long arrow right'),
+    'fa-long-arrow-up' => t('Long arrow up'),
+    'fa-magic' => t('Magic'),
+    'fa-magnet' => t('Magnet'),
+    'fa-mail-reply-all' => t('Mail reply all'),
+    'fa-male' => t('Male'),
+    'fa-map-marker' => t('Map marker'),
+    'fa-maxcdn' => t('Maxcdn'),
+    'fa-medkit' => t('Medkit'),
+    'fa-meh-o' => t('Meh o'),
+    'fa-microphone' => t('Microphone'),
+    'fa-microphone-slash' => t('Microphone slash'),
+    'fa-minus' => t('Minus'),
+    'fa-minus-circle' => t('Minus circle'),
+    'fa-minus-square' => t('Minus square'),
+    'fa-minus-square-o' => t('Minus square o'),
+    'fa-mobile' => t('Mobile'),
+    'fa-money' => t('Money'),
+    'fa-moon-o' => t('Moon o'),
+    'fa-music' => t('Music'),
+    'fa-outdent' => t('Outdent'),
+    'fa-pagelines' => t('Pagelines'),
+    'fa-paperclip' => t('Paperclip'),
+    'fa-pause' => t('Pause'),
+    'fa-pencil' => t('Pencil'),
+    'fa-pencil-square' => t('Pencil square'),
+    'fa-pencil-square-o' => t('Pencil square o'),
+    'fa-phone' => t('Phone'),
+    'fa-phone-square' => t('Phone square'),
+    'fa-picture-o' => t('Picture o'),
+    'fa-pinterest' => t('Pinterest'),
+    'fa-pinterest-square' => t('Pinterest square'),
+    'fa-plane' => t('Plane'),
+    'fa-play' => t('Play'),
+    'fa-play-circle' => t('Play circle'),
+    'fa-play-circle-o' => t('Play circle o'),
+    'fa-plus' => t('Plus'),
+    'fa-plus-circle' => t('Plus circle'),
+    'fa-plus-square' => t('Plus square'),
+    'fa-plus-square-o' => t('Plus square o'),
+    'fa-power-off' => t('Power off'),
+    'fa-print' => t('Print'),
+    'fa-puzzle-piece' => t('Puzzle piece'),
+    'fa-qrcode' => t('Qrcode'),
+    'fa-question' => t('Question'),
+    'fa-question-circle' => t('Question circle'),
+    'fa-quote-left' => t('Quote left'),
+    'fa-quote-right' => t('Quote right'),
+    'fa-random' => t('Random'),
+    'fa-refresh' => t('Refresh'),
+    'fa-renren' => t('Renren'),
+    'fa-repeat' => t('Repeat'),
+    'fa-reply' => t('Reply'),
+    'fa-reply-all' => t('Reply all'),
+    'fa-retweet' => t('Retweet'),
+    'fa-road' => t('Road'),
+    'fa-rocket' => t('Rocket'),
+    'fa-rss' => t('Rss'),
+    'fa-rss-square' => t('Rss square'),
+    'fa-rub' => t('Rub'),
+    'fa-scissors' => t('Scissors'),
+    'fa-search' => t('Search'),
+    'fa-search-minus' => t('Search minus'),
+    'fa-search-plus' => t('Search plus'),
+    'fa-share' => t('Share'),
+    'fa-share-square' => t('Share square'),
+    'fa-share-square-o' => t('Share square o'),
+    'fa-shield' => t('Shield'),
+    'fa-shopping-cart' => t('Shopping cart'),
+    'fa-sign-in' => t('Sign in'),
+    'fa-sign-out' => t('Sign out'),
+    'fa-signal' => t('Signal'),
+    'fa-sitemap' => t('Sitemap'),
+    'fa-skype' => t('Skype'),
+    'fa-smile-o' => t('Smile o'),
+    'fa-sort' => t('Sort'),
+    'fa-sort-alpha-asc' => t('Sort alpha asc'),
+    'fa-sort-alpha-desc' => t('Sort alpha desc'),
+    'fa-sort-amount-asc' => t('Sort amount asc'),
+    'fa-sort-amount-desc' => t('Sort amount desc'),
+    'fa-sort-asc' => t('Sort asc'),
+    'fa-sort-desc' => t('Sort desc'),
+    'fa-sort-numeric-asc' => t('Sort numeric asc'),
+    'fa-sort-numeric-desc' => t('Sort numeric desc'),
+    'fa-spinner' => t('Spinner'),
+    'fa-square' => t('Square'),
+    'fa-square-o' => t('Square o'),
+    'fa-stack-exchange' => t('Stack exchange'),
+    'fa-stack-overflow' => t('Stack overflow'),
+    'fa-star' => t('Star'),
+    'fa-star-half' => t('Star half'),
+    'fa-star-half-o' => t('Star half o'),
+    'fa-star-o' => t('Star o'),
+    'fa-step-backward' => t('Step backward'),
+    'fa-step-forward' => t('Step forward'),
+    'fa-stethoscope' => t('Stethoscope'),
+    'fa-stop' => t('Stop'),
+    'fa-strikethrough' => t('Strikethrough'),
+    'fa-subscript' => t('Subscript'),
+    'fa-suitcase' => t('Suitcase'),
+    'fa-sun-o' => t('Sun o'),
+    'fa-superscript' => t('Superscript'),
+    'fa-table' => t('Table'),
+    'fa-tablet' => t('Tablet'),
+    'fa-tachometer' => t('Tachometer'),
+    'fa-tag' => t('Tag'),
+    'fa-tags' => t('Tags'),
+    'fa-tasks' => t('Tasks'),
+    'fa-terminal' => t('Terminal'),
+    'fa-text-height' => t('Text height'),
+    'fa-text-width' => t('Text width'),
+    'fa-th' => t('Th'),
+    'fa-th-large' => t('Th large'),
+    'fa-th-list' => t('Th list'),
+    'fa-thumb-tack' => t('Thumb tack'),
+    'fa-thumbs-down' => t('Thumbs down'),
+    'fa-thumbs-o-down' => t('Thumbs o down'),
+    'fa-thumbs-o-up' => t('Thumbs o up'),
+    'fa-thumbs-up' => t('Thumbs up'),
+    'fa-ticket' => t('Ticket'),
+    'fa-times' => t('Times'),
+    'fa-times-circle' => t('Times circle'),
+    'fa-times-circle-o' => t('Times circle o'),
+    'fa-tint' => t('Tint'),
+    'fa-trash-o' => t('Trash o'),
+    'fa-trello' => t('Trello'),
+    'fa-trophy' => t('Trophy'),
+    'fa-truck' => t('Truck'),
+    'fa-try' => t('Try'),
+    'fa-tumblr' => t('Tumblr'),
+    'fa-tumblr-square' => t('Tumblr square'),
+    'fa-twitter' => t('Twitter'),
+    'fa-twitter-square' => t('Twitter square'),
+    'fa-umbrella' => t('Umbrella'),
+    'fa-underline' => t('Underline'),
+    'fa-undo' => t('Undo'),
+    'fa-unlock' => t('Unlock'),
+    'fa-unlock-alt' => t('Unlock alt'),
+    'fa-upload' => t('Upload'),
+    'fa-usd' => t('Usd'),
+    'fa-user' => t('User'),
+    'fa-user-md' => t('User md'),
+    'fa-users' => t('Users'),
+    'fa-video-camera' => t('Video camera'),
+    'fa-vimeo-square' => t('Vimeo square'),
+    'fa-vk' => t('Vk'),
+    'fa-volume-down' => t('Volume down'),
+    'fa-volume-off' => t('Volume off'),
+    'fa-volume-up' => t('Volume up'),
+    'fa-weibo' => t('Weibo'),
+    'fa-wheelchair' => t('Wheelchair'),
+    'fa-windows' => t('Windows'),
+    'fa-wrench' => t('Wrench'),
+    'fa-xing' => t('Xing'),
+    'fa-xing-square' => t('Xing square'),
+    'fa-youtube' => t('Youtube'),
+    'fa-youtube-play' => t('Youtube play'),
+    'fa-youtube-square' => t('Youtube square')
+  );
+  return $list;
+}
+
+/**
+ * Function
+ *
+ * @param
+ *
+ * @return
+ *   Returns
+ *
+ */
+function getlocations_leaflet_awesome_colors_list() {
+  $list = array(
+    'red'        => t('Red'),
+    'darkred'    => t('Dark red'),
+    'orange'     => t('Orange'),
+    'green'      => t('Green'),
+    'darkgreen'  => t('Dark green'),
+    'blue'       => t('Blue'),
+    'purple'     => t('Purple'),
+    'darkpurple' => t('Dark purple'),
+    'cadetblue'  => t('Cadet blue'),
+  );
+  return $list;
+}
+
+/**
+ * Function
+ *
+ * @param
+ *
+ * @return
+ *   Returns
+ *
+ */
+function getlocations_leaflet_awesome_markers_elements_get($defaults, $labels = '', $prefix = '') {
+
+  $iconlist = getlocations_leaflet_awesome_markers_list();
+  $colorlist = getlocations_leaflet_awesome_colors_list();
+  if (! empty($prefix)) {
+    $prefix .= '_marker_';
+  }
+
+  if (empty($labels)) {
+    $labels = array(
+      'awesome_icon' => t('Awesome icon'),
+      'awesome_icon_color' => t('Awesome icon color'),
+      'awesome_marker_color' => t('Awesome marker color'),
+      'awesome_title' => t('Awesome Fonts icon settings'),
+      'awesome_icon_spin' => t('Awesome icon spin'),
+      'awesome_icon_size' => t('Awesome icon size'),
+      'awesome_icon_type' => t('Awesome icon type'),
+      'awesome_icon_flip' => t('Awesome icon flip and rotate'),
+    );
+  }
+
+  $form[$prefix . 'awesome_icon_type'] = getlocations_element_dd(
+    $labels['awesome_icon_type'],
+    (isset($defaults[$prefix . 'awesome_icon_type']) && $defaults[$prefix . 'awesome_icon_type'] ? $defaults[$prefix . 'awesome_icon_type'] : $defaults['awesome_icon_type']),
+    array('b' => t('Icon in marker'), 'i' => t('Icon only'), 'm' => t('Marker only'))
+  );
+
+  $form[$prefix . 'awesome_icon_type']['#prefix'] = '<fieldset class="collapsible collapsed form-wrapper"><legend><span class="fieldset-legend">' . $labels['awesome_title'] . '</span></legend><div class="fieldset-wrapper">';
+
+  $form[$prefix . 'awesome_icon'] = getlocations_element_dd(
+    $labels['awesome_icon'],
+    (isset($defaults[$prefix . 'awesome_icon']) && $defaults[$prefix . 'awesome_icon'] ? $defaults[$prefix . 'awesome_icon'] : $defaults['awesome_icon']),
+    $iconlist
+  );
+
+  $form[$prefix . 'awesome_icon_color_selector'] = getlocations_element_dd(
+    $labels['awesome_icon_color'],
+    (isset($defaults[$prefix . 'awesome_icon_color_selector']) ? $defaults[$prefix . 'awesome_icon_color_selector'] : $defaults['awesome_icon_color_selector']),
+    array('white' => t('White'), 'black' => t('Black'))
+  );
+
+  $form[$prefix . 'awesome_icon_color'] = getlocations_element_map_tf(
+    $labels['awesome_icon_color'],
+    (isset($defaults[$prefix . 'awesome_icon_color']) && $defaults[$prefix . 'awesome_icon_color'] ? $defaults[$prefix . 'awesome_icon_color'] : $defaults['awesome_icon_color']),
+    t('Entries here will be used instead of the default colors in the select list. Use hex, eg #F0F000'),
+    10
+  );
+
+  $form[$prefix . 'awesome_icon_size'] = getlocations_element_dd(
+    $labels['awesome_icon_size'],
+    (isset($defaults[$prefix . 'awesome_icon_size']) && $defaults[$prefix . 'awesome_icon_size'] ? $defaults[$prefix . 'awesome_icon_size'] : $defaults['awesome_icon_size']),
+    array('' => t('Default'), 'fa-lg' => t('Large'), 'fa-2x' => t('2x large'), 'fa-3x' => t('3x large'), 'fa-4x' => t('4x large'), 'fa-5x' => t('5x large')),
+    t('Icon size is only applied when "Icon only" has been selected in Awesome icon type.')
+  );
+
+  $form[$prefix . 'awesome_icon_flip'] = getlocations_element_dd(
+    $labels['awesome_icon_flip'],
+    (isset($defaults[$prefix . 'awesome_icon_flip']) && $defaults[$prefix . 'awesome_icon_flip'] ? $defaults[$prefix . 'awesome_icon_flip'] : $defaults['awesome_icon_flip']),
+    array('' => t('Normal'), 'fa-flip-horizontal' => t('Flip Horizontal'), 'fa-flip-vertical' => t('Flip Vertical'), 'fa-rotate-90' => t('Rotate 90 degrees'), 'fa-rotate-180' => t('Rotate 180 degrees'), 'fa-rotate-270' => t('Rotate 270 degrees')),
+    t('These Icon modifiers are only applied when "Icon only" has been selected in Awesome icon type.')
+  );
+
+  $form[$prefix . 'awesome_icon_spin'] = getlocations_element_map_checkbox(
+    $labels['awesome_icon_spin'],
+    (isset($defaults[$prefix . 'awesome_icon_spin']) ? $defaults[$prefix . 'awesome_icon_spin'] : $defaults['awesome_icon_spin'])
+  );
+
+  $form[$prefix . 'awesome_marker_color'] = getlocations_element_dd(
+    $labels['awesome_marker_color'],
+    (isset($defaults[$prefix . 'awesome_marker_color']) && $defaults[$prefix . 'awesome_marker_color'] ? $defaults[$prefix . 'awesome_marker_color'] : $defaults['awesome_marker_color']),
+    $colorlist
+  );
+  $form[$prefix . 'awesome_marker_color']['#suffix'] = '</div></fieldset>';
+
+  return $form;
+
+}
+
+/**
+ * Function
+ *
+ * @param
+ *
+ * @return
+ *   Returns
+ *
+ */
+function getlocations_leaflet_awesome_marker_get($defaults, $prefix = '') {
+
+  if (! empty($prefix)) {
+    $prefix .= '_marker_';
+  }
+  $awesome_icon_type = (isset($defaults[$prefix . 'awesome_icon_type']) && $defaults[$prefix . 'awesome_icon_type'] ? $defaults[$prefix . 'awesome_icon_type'] : $defaults['awesome_icon_type']);
+  if ($awesome_icon_type == 'i' ) {
+    // icon only
+    $icon = (isset($defaults[$prefix . 'awesome_icon']) ? $defaults[$prefix . 'awesome_icon'] : $defaults['awesome_icon']);
+    $selector = (isset($defaults[$prefix . 'awesome_icon_color_selector']) ? $defaults[$prefix . 'awesome_icon_color_selector'] : $defaults['awesome_icon_color_selector']);
+    $iconcolor = ($defaults[$prefix . 'awesome_icon_color'] ? $defaults[$prefix . 'awesome_icon_color'] : $selector);
+    $spin = (isset($defaults[$prefix . 'awesome_icon_spin']) ? $defaults[$prefix . 'awesome_icon_spin'] : $defaults['awesome_icon_spin']);
+    $flip = (isset($defaults[$prefix . 'awesome_icon_flip']) ? $defaults[$prefix . 'awesome_icon_flip'] : $defaults['awesome_icon_flip']);
+    $iconsize = (isset($defaults[$prefix . 'awesome_icon_size']) ? $defaults[$prefix . 'awesome_icon_size'] : $defaults['awesome_icon_size']);
+    $px = 12;
+    if ($iconsize == 'fa-lg') {
+      $px = 16;
+    }
+    elseif ($iconsize == 'fa-2x') {
+      $px = 24;
+    }
+    elseif ($iconsize == 'fa-3x') {
+      $px = 36;
+    }
+    elseif ($iconsize == 'fa-4x') {
+      $px = 48;
+    }
+    elseif ($iconsize == 'fa-5x') {
+      $px = 60;
+    }
+    $style = '';
+    $class = array();
+    $class[] = 'fa';
+    $class[] = $icon;
+    if ($iconsize) {
+      $class[] = $iconsize;
+    }
+    if ($spin) {
+      $class[] = 'fa-spin';
+    }
+    if ($flip) {
+      $class[] = $flip;
+    }
+    if ($iconcolor == 'black' || $iconcolor == 'white') {
+      $class[] = 'fa-' . $iconcolor;
+    }
+    else {
+      $style = 'style="color:' . $iconcolor . '"';
+    }
+
+    $classes = implode(' ', $class);
+    $html = '<i class="' . $classes . '" ' . $style . '></i>';
+    $vicon = array('px' => $px, 'html' => $html);
+  }
+  elseif ($awesome_icon_type == 'm' ) {
+    // marker only, do it by providing a nonexistent icon
+    $markercolor = (isset($defaults[$prefix . 'awesome_marker_color']) ? $defaults[$prefix . 'awesome_marker_color'] : $defaults['awesome_marker_color']);
+    $vicon = array('icon' => 'fa-xxx', 'markerColor' => $markercolor, 'prefix' => 'fa', 'spin' => FALSE);
+  }
+  else {
+    // both
+    $icon = (isset($defaults[$prefix . 'awesome_icon']) ? $defaults[$prefix . 'awesome_icon'] : $defaults['awesome_icon']);
+    $markercolor = (isset($defaults[$prefix . 'awesome_marker_color']) ? $defaults[$prefix . 'awesome_marker_color'] : $defaults['awesome_marker_color']);
+    $selector = (isset($defaults[$prefix . 'awesome_icon_color_selector']) ? $defaults[$prefix . 'awesome_icon_color_selector'] : $defaults['awesome_icon_color_selector']);
+    $iconcolor = (isset($defaults[$prefix . 'awesome_icon_color']) && $defaults[$prefix . 'awesome_icon_color'] ? $defaults[$prefix . 'awesome_icon_color'] : $selector);
+    $spin = (isset($defaults[$prefix . 'awesome_icon_spin']) ? $defaults[$prefix . 'awesome_icon_spin'] : $defaults['awesome_icon_spin']);
+    #$flip = (isset($defaults[$prefix . 'awesome_icon_flip']) ? $defaults[$prefix . 'awesome_icon_flip'] : $defaults['awesome_icon_flip']);
+    $vicon = array('icon' => $icon, 'markerColor' => $markercolor, 'iconColor' => $iconcolor, 'prefix' => 'fa', 'spin' => $spin);
+  }
+
+  return array('data' => $vicon, 'type' => $awesome_icon_type);
+}
+
+
+/**
+ * Implements hook_theme().
+ *
+ * This lets us tell Drupal about our theme functions and their arguments.
+ */
+function getlocations_leaflet_theme() {
+
+  return array(
+    'getlocations_leaflet_link' => array(
+      'variables' => array(
+        'link_text' => '',
+        'entity_type' => '',
+        'entity_id' => 0,
+      ),
+    ),
+    'getlocations_leaflet_map' => array(
+      'variables' => array(
+        'width' => '',
+        'height' => '',
+        'map_settings' => '',
+        'mapid' => '',
+        'links' => '',
+      ),
+    ),
+    'getlocations_leaflet_plugin_style_options_form' => array(
+      'render element' => 'form',
+    ),
+    'getlocations_leaflet_settings_form' => array(
+      'render element' => 'form',
+    ),
+
+
+  );
+}
+
+/**
+ * Function
+ *
+ * @param
+ *
+ * @return
+ *   Returns
+ *
+ */
+function theme_getlocations_leaflet_link($variables) {
+  $link_text   = $variables['link_text'];
+  $entity_type = $variables['entity_type'];
+  $entity_id   = $variables['entity_id'];
+
+  $output = '';
+  $path = 'getlocations_leaflet/' . $entity_type . '/' . $entity_id;
+  $link = t('!l on a map', array('!l' => l($link_text, $path)));
+
+  $output .= '<div class="getlocations_link">' . $link . '</div>';
+  return $output;
+
+}
+
+/**
+ * Function
+ *
+ * @param
+ *
+ * @return
+ *   Returns
+ *
+ */
+function theme_getlocations_leaflet_map($variables) {
+  drupal_add_css(GETLOCATIONS_LEAFLET_PATH . '/getlocations_leaflet.css');
+  $width = $variables['width'];
+  $height = $variables['height'];
+  $map_settings = $variables['map_settings'];
+  $mapid = $variables['mapid'];
+  $links = $variables['links'];
+
+  $datanum = $map_settings['datanum'];
+  $latlons = $map_settings['latlons'];
+  $icons = $map_settings['icons'];
+  $minmaxes = $map_settings['map_settings']['minmaxes'];
+  unset($map_settings['datanum']);
+  unset($map_settings['latlons']);
+  unset($map_settings['icons']);
+  unset($map_settings['map_settings']['minmaxes']);
+
+  getlocations_leaflet_js_settings_do($map_settings, $mapid);
+
+  $output = '';
+
+  // links
+  if (isset($links['returnlink'])) {
+    $output .= '<div class="getlocations_returnlink">' . $links['returnlink'] . '</div>';
+  }
+
+  // wrap the map
+  $output .= '<div id="getlocations_leaflet_wrapper_' . $mapid . '"  style="width: ' . $width . '; height: ' . $height . '" >';
+  $output .= '<div class="getlocations_leaflet_canvas" id="getlocations_leaflet_canvas_' . $mapid . '" style="width: 100%; height: 100%" ></div>';
+  $output .= '</div>';
+
+  // give each map its own data
+  $localdata = json_encode(array(
+    'datanum'  => $datanum,
+    'latlons'  => $latlons,
+    'icons'    => $icons,
+    'minmaxes' => $minmaxes
+  ));
+  $output .= "\n" . '<script type="text/javascript">' . "\n" . '<!--//--><![CDATA[//><!--' . "\n";
+  $output .= 'getlocations_leaflet_data["' . $mapid . '"] = ' . $localdata . ';' . "\n";
+  $output .= '//--><!]]>' . "\n" . '</script>' . "\n";
+
+  return $output;
+
+}
+
+/**
+ * Function
+ *
+ * @param
+ *
+ * @return
+ *   Returns
+ *
+ */
+function theme_getlocations_leaflet_plugin_style_options_form($variables) {
+  $form = $variables['form'];
+  $output = '';
+
+  $output .= drupal_render_children($form);
+  return $output;
+}
+
+/**
+ * Function
+ *
+ * @param
+ *
+ * @return
+ *   Returns
+ *
+ */
+function theme_getlocations_leaflet_settings_form($variables) {
+  $form = $variables['form'];
+  $output = '';
+  $form['getlocations_leaflet_defaults']['returnlink_page_link']['#prefix'] = '<div id="wrap-page-link">';
+  $form['getlocations_leaflet_defaults']['returnlink_page_link']['#suffix'] = '</div>';
+  if (isset($form['getlocations_leaflet_defaults']['returnlink_user_link'])) {
+    $form['getlocations_leaflet_defaults']['returnlink_user_link']['#prefix'] = '<div id="wrap-user-link">';
+    $form['getlocations_leaflet_defaults']['returnlink_user_link']['#suffix'] = '</div>';
+  }
+  if (isset($form['getlocations_leaflet_defaults']['returnlink_term_link'])) {
+    $form['getlocations_leaflet_defaults']['returnlink_term_link']['#prefix'] = '<div id="wrap-term-link">';
+    $form['getlocations_leaflet_defaults']['returnlink_term_link']['#suffix'] = '</div>';
+  }
+  if (isset($form['getlocations_leaflet_defaults']['returnlink_comment_link'])) {
+    $form['getlocations_leaflet_defaults']['returnlink_comment_link']['#prefix'] = '<div id="wrap-comment-link">';
+    $form['getlocations_leaflet_defaults']['returnlink_comment_link']['#suffix'] = '</div>';
+  }
+
+  $output .= drupal_render_children($form);
+  return $output;
+}

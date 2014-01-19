@@ -1,0 +1,15 @@
+name = GetLocations Leaflet
+description = "Provides Leaflet Maps integration for Getlocations."
+core = 7.x
+php = 5
+package = Fields
+dependencies[] = getlocations
+
+files[] = views/getlocations_leaflet_plugin_style.inc
+
+; Information added by Drupal.org packaging script on 2014-01-14
+version = "7.x-1.11"
+core = "7.x"
+project = "getlocations"
+datestamp = "1389691417"
+
