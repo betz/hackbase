@@ -1,0 +1,92 @@
+<?php
+
+
+/**
+ * Implements hook_ds_fields_info()
+ */
+function hackbase_general_ds_fields_info($entity_type) {
+
+  $node_fields = array();
+  $field_collection_fields = array();
+
+  $field_collection_fields['rendered_todo'] = array(
+    'title' => t("Rendered todo"),
+    'field_type' => DS_FIELD_TYPE_FUNCTION,
+    'ui_limit' => array('field_todo|*'),
+    'function' => 'hackbase_general_rendered_todo',
+  );
+
+  return array(
+    'node' => $node_fields,
+    'field_collection_item' => $field_collection_fields,
+  );
+}
+
+
+/**
+ * Implements hook_ds_field_settings_form().
+ */
+function hackbase_general_ds_field_settings_form($field) {
+  return ds_ds_field_settings_form($field);
+}
+
+
+/**
+ * Implements hook_ds_field_format_summary().
+ */
+function hackbase_general_ds_field_format_summary($field) {
+  return ds_ds_field_format_summary($field);
+}
+
+
+/**
+ * Implements hook_theme().
+ */
+function hackbase_general_theme($existing, $type, $theme, $path) {
+  return array(
+    'hackbase_todo' => array(
+      'variables' => array(
+        'title' => NULL,
+        'done' => NULL,
+        'link' => NULL,
+        'member' => NULL,
+      ),
+    ),
+  );
+}
+
+
+function hackbase_general_rendered_todo($field) {
+
+  $title = @$field['entity']->field_todo_title[LANGUAGE_NONE][0]['safe_value'];
+  $done = @$field['entity']->field_done[LANGUAGE_NONE][0]['value'];
+  $link = @$field['entity']->field_todo_link[LANGUAGE_NONE][0]['url'];
+
+  if(!empty($field['entity']->field_todo_member[LANGUAGE_NONE][0]['target_id'])) {
+    $account = user_load($field['entity']->field_todo_member[LANGUAGE_NONE][0]['target_id']);
+    $member = $account->name;
+  }
+
+  return theme('hackbase_todo', array(
+    'title' => $title,
+    'done' => $done,
+    'link' => $link,
+    'member' => (!empty($member)) ? $member : NULL,
+  ));
+}
+
+
+function theme_hackbase_todo($vars) {
+
+  $title = $vars['title'];
+  if(!empty($vars['member'])) {
+    $title .= ' (' . check_plain($vars['member']) . ')';
+  }
+
+  if($vars['link']) {
+    return l($title, $vars['link']);
+  }
+
+  return $title;
+}
+

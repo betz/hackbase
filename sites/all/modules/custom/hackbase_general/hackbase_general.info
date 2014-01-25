@@ -1,0 +1,4 @@
+name = Hackbase general
+description = Custom functionality
+core = 7.x
+package = Hackbase
